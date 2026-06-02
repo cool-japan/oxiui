@@ -1,0 +1,6 @@
+FROM rust:slim
+WORKDIR /oxiui
+COPY . .
+# No apt-get install — must build with zero system deps
+RUN cargo build -p oxiui --no-default-features --features software 2>&1
+RUN bash scripts/ffi-audit.sh

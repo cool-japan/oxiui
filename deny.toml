@@ -1,0 +1,43 @@
+[advisories]
+ignore = []
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "ISC", "Unicode-3.0", "BSD-2-Clause", "BSD-3-Clause", "OpenSSL"]
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+deny = [
+  # GTK C bindings
+  { name = "gtk" },
+  { name = "gtk-sys" },
+  { name = "gtk4" },
+  { name = "gtk4-sys" },
+  # Qt C++ bindings
+  { name = "qmetaobject" },
+  { name = "qt_core" },
+  { name = "qt_gui" },
+  { name = "qt_widgets" },
+  # SDL C bindings
+  { name = "sdl2" },
+  { name = "sdl2-sys" },
+  # System font C libraries
+  { name = "freetype-sys" },
+  { name = "harfbuzz-sys" },
+  { name = "pango-sys" },
+  { name = "fontconfig-sys" },
+  # Standard noffi forbids (crypto C)
+  { name = "ring" },
+  { name = "aws-lc-sys" },
+  { name = "openssl-sys" },
+  { name = "native-tls" },
+  # Compression must use oxiarc
+  { name = "flate2" },
+  { name = "brotli" },
+  { name = "miniz_oxide" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

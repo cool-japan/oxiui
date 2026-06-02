@@ -1,0 +1,22 @@
+[package]
+name = "oxiui-egui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "egui/eframe adapter for OxiUI"
+categories = ["gui"]
+keywords = ["egui", "eframe", "oxiui", "cooljapan", "pure-rust"]
+
+[features]
+default = []
+
+[dependencies]
+oxiui-core.workspace = true
+oxiui-render-wgpu.workspace = true
+oxiui-text.workspace = true
+oxiui-theme.workspace = true
+egui.workspace = true
+eframe.workspace = true

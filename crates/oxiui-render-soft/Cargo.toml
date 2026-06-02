@@ -1,0 +1,24 @@
+[package]
+name = "oxiui-render-soft"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Software CPU framebuffer backend for OxiUI (headless / ffi-audit)"
+categories = ["rendering", "gui"]
+keywords = ["softbuffer", "headless", "oxiui", "cooljapan", "pure-rust"]
+
+[features]
+default = ["text"]
+parallel = ["dep:rayon"]
+text = ["dep:oxiui-text"]
+theme = ["dep:oxiui-theme"]
+
+[dependencies]
+oxiui-core.workspace = true
+png.workspace = true
+rayon = { workspace = true, optional = true }
+oxiui-text = { workspace = true, optional = true }
+oxiui-theme = { workspace = true, optional = true }

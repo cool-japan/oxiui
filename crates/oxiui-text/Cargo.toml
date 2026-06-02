@@ -1,0 +1,18 @@
+[package]
+name = "oxiui-text"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OxiText/OxiFont bridge for OxiUI text rendering"
+categories = ["text-processing", "gui"]
+keywords = ["text", "oxiui", "oxitext", "cooljapan", "pure-rust"]
+
+[features]
+default = []
+
+[dependencies]
+oxiui-core.workspace = true
+oxitext.workspace = true

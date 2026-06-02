@@ -1,0 +1,17 @@
+[package]
+name = "oxiui-theme"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "COOLJAPAN dark/light themes for OxiUI"
+categories = ["gui"]
+keywords = ["theme", "oxiui", "cooljapan", "dark-mode", "pure-rust"]
+
+[features]
+default = []
+
+[dependencies]
+oxiui-core.workspace = true

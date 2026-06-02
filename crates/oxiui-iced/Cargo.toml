@@ -1,0 +1,19 @@
+[package]
+name = "oxiui-iced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "iced GUI backend adapter for OxiUI"
+keywords = ["gui", "iced", "ui", "cooljapan"]
+categories = ["gui"]
+
+[dependencies]
+oxiui-core  = { workspace = true }
+oxiui-theme = { workspace = true }
+iced        = { workspace = true, features = ["image", "advanced"] }
+
+[features]
+default = []

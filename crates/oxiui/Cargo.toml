@@ -1,0 +1,103 @@
+[package]
+name = "oxiui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OxiUI — Pure-Rust GUI facade (egui + wgpu, no GTK/Qt/SDL)"
+categories = ["gui", "rendering"]
+keywords = ["gui", "egui", "wgpu", "cooljapan", "pure-rust"]
+
+[features]
+gpu      = ["dep:oxiui-render-wgpu"]
+software = ["dep:oxiui-render-soft"]
+egui     = ["dep:oxiui-egui", "dep:oxiui-render-wgpu", "dep:egui", "dep:eframe", "dep:png"]
+iced     = ["dep:oxiui-iced", "dep:iced"]
+table    = ["dep:oxiui-table"]
+a11y     = ["dep:oxiui-accessibility", "dep:accesskit"]
+web      = []  # oxiui-web is publish=false, dep removed for publish; restore with version dep after oxiui-web is publishable
+slint    = ["dep:oxiui-slint", "oxiui-slint/slint"]
+dioxus   = ["dep:oxiui-dioxus", "oxiui-dioxus/dioxus"]
+default  = ["gpu", "egui"]
+
+[dependencies]
+oxiui-core.workspace = true
+oxiui-theme.workspace = true
+
+[dependencies.oxiui-egui]
+workspace = true
+optional = true
+
+[dependencies.oxiui-render-wgpu]
+workspace = true
+optional = true
+
+[dependencies.oxiui-render-soft]
+workspace = true
+optional = true
+
+[dependencies.egui]
+workspace = true
+optional = true
+
+[dependencies.eframe]
+workspace = true
+optional = true
+
+[dependencies.oxiui-iced]
+workspace = true
+optional = true
+
+[dependencies.iced]
+workspace = true
+optional = true
+
+[dependencies.oxiui-table]
+workspace = true
+optional = true
+
+[dependencies.oxiui-accessibility]
+workspace = true
+optional = true
+
+[dependencies.accesskit]
+workspace = true
+optional = true
+
+# oxiui-web has publish=false — dep removed for publish; restore after oxiui-web is publishable
+# [dependencies.oxiui-web]
+# workspace = true
+# optional = true
+
+[dependencies.oxiui-slint]
+workspace = true
+optional = true
+
+[dependencies.oxiui-dioxus]
+workspace = true
+optional = true
+
+[dependencies.png]
+workspace = true
+optional = true
+
+[[example]]
+name = "hello"
+
+[[example]]
+name = "hello_iced"
+required-features = ["iced"]
+
+[[example]]
+name = "hello_table"
+required-features = ["table"]
+
+[[example]]
+name = "hello_slint"
+required-features = ["slint"]
+
+[[example]]
+name = "hello_dioxus"
+required-features = ["dioxus"]

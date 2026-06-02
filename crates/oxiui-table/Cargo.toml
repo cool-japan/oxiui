@@ -1,0 +1,31 @@
+[package]
+name        = "oxiui-table"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Virtualized table widget with egui and iced backends for OxiUI"
+keywords    = ["gui", "table", "egui", "iced", "cooljapan"]
+categories  = ["gui"]
+
+[features]
+default    = []
+egui-table = ["dep:egui", "dep:eframe"]
+iced-table = ["dep:iced"]
+
+[dependencies]
+oxiui-core = { workspace = true }
+
+[dependencies.egui]
+workspace = true
+optional  = true
+
+[dependencies.eframe]
+workspace = true
+optional  = true
+
+[dependencies.iced]
+workspace = true
+optional  = true

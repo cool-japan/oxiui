@@ -1,0 +1,26 @@
+[package]
+name = "oxiui-dioxus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OxiUI adapter for the Dioxus reactive UI framework (optional)"
+categories = ["gui", "rendering"]
+keywords = ["gui", "dioxus", "cooljapan", "pure-rust", "oxiui"]
+
+[features]
+default = []
+dioxus = ["dep:dioxus"]
+
+[dependencies]
+oxiui-core = { workspace = true }
+
+[dependencies.dioxus]
+workspace = true
+optional = true
+
+[dev-dependencies]
+# temporarily removed for publish (circular/forward dev-dep); restore after publish complete
+# oxiui-theme = { workspace = true }

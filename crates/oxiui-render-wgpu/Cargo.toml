@@ -1,0 +1,20 @@
+[package]
+name = "oxiui-render-wgpu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "wgpu GPU render surface for OxiUI"
+categories = ["rendering", "gui"]
+keywords = ["wgpu", "gpu", "oxiui", "cooljapan", "pure-rust"]
+
+[features]
+default = []
+
+[dependencies]
+oxiui-core.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true

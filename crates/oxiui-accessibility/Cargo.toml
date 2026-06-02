@@ -1,0 +1,18 @@
+[package]
+name = "oxiui-accessibility"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OxiUI accessibility bridge — builds an accesskit a11y node tree from the OxiUI widget graph"
+categories = ["accessibility", "gui"]
+keywords = ["accessibility", "a11y", "accesskit", "cooljapan", "pure-rust"]
+
+[features]
+default = []
+
+[dependencies]
+accesskit    = { workspace = true }
+oxiui-core   = { workspace = true }

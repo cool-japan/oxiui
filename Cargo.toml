@@ -1,0 +1,103 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/oxiui-core",
+  "crates/oxiui-text",
+  "crates/oxiui-theme",
+  "crates/oxiui-render-wgpu",
+  "crates/oxiui-render-soft",
+  "crates/oxiui-egui",
+  "crates/oxiui-iced",
+  "crates/oxiui-table",
+  "crates/oxiui-accessibility",
+  "crates/oxiui-web",
+  "crates/oxiui-slint",
+  "crates/oxiui-dioxus",
+  "crates/oxiui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+authors = ["COOLJAPAN OU (Team Kitasan)"]
+license = "Apache-2.0"
+repository = "https://github.com/cool-japan/oxiui"
+description = "OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings."
+
+[workspace.dependencies]
+# Internal path deps
+oxiui-core            = { path = "crates/oxiui-core",            version = "0.1.0" }
+oxiui-text            = { path = "crates/oxiui-text",            version = "0.1.0" }
+oxiui-theme           = { path = "crates/oxiui-theme",           version = "0.1.0" }
+oxiui-render-wgpu     = { path = "crates/oxiui-render-wgpu",     version = "0.1.0" }
+oxiui-render-soft     = { path = "crates/oxiui-render-soft",     version = "0.1.0" }
+oxiui-egui            = { path = "crates/oxiui-egui",            version = "0.1.0" }
+oxiui-iced            = { path = "crates/oxiui-iced",            version = "0.1.0" }
+oxiui-table           = { path = "crates/oxiui-table",           version = "0.1.0" }
+oxiui-accessibility   = { path = "crates/oxiui-accessibility",   version = "0.1.0" }
+oxiui-web             = { path = "crates/oxiui-web",             version = "0.1.0" }
+oxiui-slint           = { path = "crates/oxiui-slint",           version = "0.1.0" }
+oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.1.0" }
+
+# External — pinned to latest stable
+egui        = { version = "0.34.3", default-features = false }
+# The `x11` + `wayland` features are required on Linux: without them winit
+# emits `compile_error!("The platform you're compiling for is not supported")`
+# because eframe pins winit with default-features off.  Both backends load the
+# X11 / Wayland client libraries dynamically at runtime (x11-dl `dlopen`, pure-Rust
+# wayland-client) — nothing C is linked at build time, so this stays Pure Rust.
+eframe      = { version = "0.34.3", default-features = false, features = ["wgpu", "x11", "wayland"] }
+softbuffer  = { version = "0.4.8" }
+
+# wgpu GPU stack — Pure Rust (Metal/Vulkan/DX12/WebGPU drivers are OS-provided at
+# runtime, not linked at build time).  Pinned to 29.0.x to match the wgpu version
+# eframe 0.34 already pulls in (egui-wgpu → wgpu 29), so Cargo unifies to a single
+# compiled wgpu artifact rather than a duplicate build.  We keep wgpu's default
+# feature set (std, parking_lot, dx12, metal, gles, vulkan, wgsl, webgpu) — all
+# Pure Rust; the C-dependent paths (static-dxc, angle, vulkan-portability) stay
+# opt-in and off.  pollster blocks on wgpu's async adapter/device requests;
+# bytemuck supplies Pod/Zeroable derives for the vertex structs.
+wgpu        = { version = "29.0.3" }
+pollster    = { version = "0.4.0" }
+bytemuck    = { version = "1.25.0", features = ["derive"] }
+# `x11` + `wayland` enabled for the same reason as eframe above (iced_winit →
+# winit needs a Linux backend to compile; both load their client libs at runtime).
+iced        = { version = "0.14.0", default-features = false, features = ["wgpu", "thread-pool", "x11", "wayland"] }
+accesskit       = { version = "0.24.0" }
+# accesskit_winit requires winit 0.30, which matches eframe 0.34's winit dependency.
+# eframe 0.34 already bundles its own accesskit integration internally.
+# The core a11y tree crate (oxiui-accessibility) only needs accesskit (not accesskit_winit).
+# accesskit_winit integration (sub-task 8b) will be wired when the wasm/IME work lands.
+accesskit_winit = { version = "0.33.0" }
+
+# wasm32 deps (only used inside oxiui-web, always cfg-gated to wasm32)
+wasm-bindgen         = { version = "0.2.122" }
+wasm-bindgen-futures = { version = "0.4" }
+web-sys              = { version = "0.3.99", features = ["Window", "Document", "HtmlCanvasElement", "WebGlRenderingContext", "Event", "KeyboardEvent"] }
+
+# Wave 1 + Wave 2 deps
+oxifont  = { version = "0.1.0" }
+oxitext  = { version = "0.1.0" }
+
+# PNG encoding/decoding — pure Rust, zero C deps
+png = { version = "0.18.1" }
+
+# Slint GUI toolkit — GPL-3.0 OR royalty-free OR commercial; optional adapter
+# renderer-software provides a Pure Rust CPU renderer; no GTK/Qt/C++ required.
+# compat-1-2 maintains backward compatibility with 1.x API.
+# backend-winit is NOT included; SlintCtx operates in collection mode for M5.
+slint = { version = "1.16.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+
+# Dioxus reactive UI — MIT/Apache-2.0; optional adapter
+# minimal feature: macro + html + signals + hooks + launch — Pure Rust, no wry/tao/WebKit.
+# The `desktop` feature is intentionally excluded (pulls in C/C++ WebKit deps).
+dioxus = { version = "0.7.9", default-features = false, features = ["minimal"] }
+
+# Serialization — Pure Rust
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+
+# Testing + parallelism — Pure Rust
+proptest = "1.11.0"
+rayon    = "1.12.0"
