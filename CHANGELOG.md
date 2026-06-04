@@ -7,6 +7,171 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.1] - 2026-06-04
+
+### Added
+
+- **New crate `oxiui-compute-wgpu`** — headless wgpu GPU-compute abstraction for the COOLJAPAN
+  ecosystem. Provides `ComputeContext` / `ContextBuilder`, `Dispatcher`, `PipelineCache`,
+  `storage_buffer_init`, `read_back` / `read_back_async`, `BufferPool`, `SubAllocator`, a WGSL
+  preprocessor/validator, and built-in kernels (`SHADER_MATMUL`, `SHADER_PREFIX_SUM`,
+  `SHADER_BITONIC_SORT`, `SHADER_HISTOGRAM`, `SHADER_SPH_DENSITY`, and template variants).
+  Optional `hot-reload` feature adds `ShaderWatcher` for live WGSL file watching via `notify`.
+  Re-exports `wgpu`, `bytemuck`, and `pollster` so consumers need only a single dependency entry.
+
+- **`oxiui-core`: `WindowManager` + `WindowChannel` + `WindowConfig` + `WindowId` + `WindowEvent`**
+  — new `window` module provides a multi-window management layer decoupled from any concrete backend.
+
+- **`oxiui-core`: `A11yRole` enum** — 28-variant semantic accessibility role type for use in
+  `Widget::a11y_role()`.  Maps to the full `accesskit::Role` set via `oxiui-accessibility`.
+
+- **`oxiui-core`: `Widget::a11y_role`, `Widget::a11y_label`, `Widget::a11y_description`** — three
+  new default methods on the `Widget` trait that allow widgets to self-describe without depending on
+  `oxiui-accessibility`.
+
+- **`oxiui-core`: `UiCtx::text_area`** — new multi-line text-area method on `UiCtx`; returns
+  `TextAreaResponse` (also new).
+
+- **`oxiui-core`: `BlendMode`** — re-exported from `oxiui_core::paint`; enables per-draw-call blend
+  mode selection in draw lists.
+
+- **`oxiui-core`: `SpacingTokens` and `BorderTokens`** — design-token structs for semantic spacing
+  (xs/sm/md/lg/xl in logical pixels) and border widths / radii.
+
+- **`oxiui-core`: `layout_subtrees_parallel` + `LayoutTask`** — parallel layout API for
+  multi-subtree layout on `rayon` thread pools.
+
+- **`oxiui-core`: `Palette::default()`** — light-mode neutral palette (white background,
+  indigo-500 accent); `Palette` now derives `PartialEq`.
+
+- **`oxiui-accessibility`: `widget_bridge` module** — `widget_to_a11y_node`, `build_a11y_tree`,
+  `A11yWidgetNode`, `NodeIdAllocator`, `core_role_to_widget_role`; bridges `oxiui_core::Widget`
+  directly to the a11y tree without extra dependencies.
+
+- **`oxiui-accessibility`: `text_bridge` module** (feature `text-bridge`) — `text_input_to_a11y`,
+  `text_area_to_a11y`, `TextInputA11yParams`; converts `oxiui_text::TextInput` / `TextArea` to
+  `A11yNode` values ready for the AccessKit pipeline.
+
+- **`oxiui-accessibility`: `focus` module** — keyboard focus order tracking, added alongside new
+  focus/text integration tests.
+
+- **`oxiui-render-wgpu`**: major expansion of the `gpu` sub-module — new files:
+  `blend.rs` (`BlendPipelineSet`, `blend_state_for_mode`),
+  `buffer.rs` (typed GPU buffers, ring buffer),
+  `compute_blur.rs` (GPU compute-based Gaussian blur),
+  `earcut.rs` (pure-Rust polygon tessellator for GPU fill),
+  `exec.rs` (`run_solid_pass`, `run_gradient_pass_batched`, `run_textured_pass`, `FrameStats`),
+  `frame_pacing.rs` (`FrameTimer`, `FrameHistogram`, `PresentModeRecommendation`),
+  `geometry.rs` (`build_geometry` CPU geometry builder),
+  `hdr.rs` (HDR / tone-mapping pipeline),
+  `instance.rs` (instanced-draw helpers),
+  `layer_cache.rs` (dirty-region layer caching),
+  `render_target.rs` (offscreen render target management),
+  `ring_buffer.rs` (GPU ring buffer for streaming vertex data),
+  `shadow.rs` (drop shadow blur pipeline),
+  `stencil.rs` (stencil-based clip paths).
+
+- **`oxiui-render-wgpu`: `WgpuBackend::headless_with_quality`** — new constructor that takes a
+  `RenderQuality` to select the MSAA sample count; screen, shadow-mask, and blur pipelines are
+  created with the correct sample counts. `WgpuBackend::headless` is preserved as a backward-
+  compatible alias at `RenderQuality::low()`.
+
+- **`oxiui-render-wgpu`: `WgpuBackend::ctx()`** — accessor for the underlying `GpuContext`.
+
+- **`oxiui-render-wgpu`: `SdfTextPipeline`** (feature `text`) — GPU SDF text rendering pipeline
+  backed by `oxitext-sdf`; uploads `SdfTile` glyph data to an R8Unorm atlas and renders resolution-
+  independent text via a WGSL smoothstep shader.
+
+- **`oxiui-render-wgpu`: `a11y_bridge` module** — maps the wgpu render tree to `A11yNode` values.
+
+- **`oxiui-render-wgpu`: `theme_bridge` module** — converts `oxiui-theme` tokens to wgpu pipeline
+  colour parameters at runtime.
+
+- **`oxiui-render-wgpu`: `atlas.rs`** — texture atlas shelf-packer for glyph and image uploads.
+
+- **`oxiui-render-wgpu`: `surface.rs`** — wgpu surface / swapchain wrapper for windowed rendering.
+
+- **`oxiui-render-wgpu`: `text_bridge.rs`** — bridge between `oxiui-text` shaped output and the
+  wgpu vertex pipeline.
+
+- **`oxiui-render-wgpu`: WGSL shaders** — new shader files: `blur.wgsl`, `blur_compute.wgsl`,
+  `composite.wgsl`, `instanced.wgsl`, `textured.wgsl`; golden-image regression test suite added
+  (`tests/golden_image_tests.rs`).
+
+- **`oxiui-render-soft`**: new modules:
+  `backend_switch.rs` — runtime switch between software and wgpu backends;
+  `canvas_upload.rs` — `softbuffer` canvas upload helpers;
+  `fft_blur.rs` (feature `fft-blur`) — FFT-accelerated Gaussian blur via `oxifft` for kernels
+    with radius ≥ 32 px (`gaussian_blur_alpha_fft`, `should_use_fft_blur`, `FFT_BLUR_MIN_RADIUS`);
+  `simd_fill.rs` — portable SIMD (via `wide`) scanline fill helpers.
+
+- **`oxiui-table`: `AsyncRowSource` trait + `PrefetchBuffer`** — async data source support with
+  LRU cache and background prefetch for IO-bound backends (REST APIs, databases).
+
+- **`oxiui-table`: `persistence.rs`** — `TableState` serialisation/deserialisation (column widths,
+  sort keys, filter state) using `oxicode`.
+
+- **`oxiui-table`: `accessibility.rs`** — ARIA table/grid accessibility tree builder; emits
+  `A11yNode` rows/cells/headers via `oxiui-accessibility`.
+
+- **`oxiui-table`: `text_integration.rs`** — rich text cell rendering via `oxiui-text`.
+
+- **`oxiui-table`: `theme_integration.rs`** — per-table theme customisation mapping tokens to row
+  stripe, header, and selection colours.
+
+- **`oxiui-text`: `emoji` module** (feature `emoji`) — `EmojiSegmenter`, `EmojiRenderer`,
+  `is_emoji_codepoint`; splits text into plain/emoji runs and routes emoji to colour glyph paths.
+
+- **`oxiui-theme`: `serial.rs`** — `oxicode`-based theme serialisation: `ThemeSnapshot` captures
+  the full set of design tokens and can be round-tripped to bytes.
+
+- **`oxiui-web`**: new modules for wasm32 targets:
+  `clipboard.rs`, `css.rs`, `drag_drop.rs`, `error_handling.rs`, `events.rs`,
+  `font_loading.rs`, `fullscreen.rs`, `ime.rs`, `performance.rs`, `responsive.rs`,
+  `service_worker.rs`.
+
+- **`oxiui-web`: `GpuCapability` + `detect_gpu_capability()`** — runtime WebGPU / WebGL capability
+  detection (probes `navigator.gpu` → WebGL2 → WebGL1 → software fallback).
+
+- **`oxiui-web`: `cursor_css` + `apply_cursor`** — CSS cursor helpers that map `CursorShape` to
+  the appropriate CSS cursor value and apply it to the canvas element.
+
+- **`oxiui` facade**: new modules — `multiwindow` (`WindowRegistry`, `SecondaryWindow`,
+  `App::open_window` / `App::close_window`), `dialog` (`DialogQueue`, `DialogKind`,
+  `DialogResponse`, `DialogId`), `menu` (`MenuBar`, `MenuBarBuilder`, `Menu`, `MenuItem`),
+  `logging` (feature `tracing`: `init_logging`, `LogLevel`), `tray` (feature `tray`:
+  `TrayConfig`, `TrayHandle`, `TrayMenuItem`), `native_dialog` (feature `dialogs`:
+  `open_file_dialog`, `save_file_dialog`, `message_dialog`, `confirm_dialog` via `rfd`).
+
+- **`oxiui` facade**: `process_rss_bytes()` — reads RSS from `/proc/self/status` (Linux) or
+  `task_info` (macOS stub) for startup memory profiling.
+
+- **Workspace dependencies**: added `oxicode 0.2.4` (replaces ad-hoc serialisation), `oxitext-sdf
+  0.1.0`, `oxifft 0.3.2` (replaces rustfft), `raw-window-handle 0.6`, `tracing 0.1.41`,
+  `tracing-subscriber 0.3.19`, `criterion 0.8.2`, `wide 1.4.0`, `tray-icon 0.24.0`, `rfd
+  0.17.2`; expanded `web-sys` feature set for clipboard, drag-drop, IME, resize observer, service
+  worker, font loading, and error events.
+
+### Changed
+
+- **`oxiui-core`: `Color` and `Palette`** now derive `oxicode::Encode` + `oxicode::Decode`.
+  `FontStyle`, `FontFeature`, `FontSpec` likewise derive encode/decode.
+
+- **`oxiui-render-wgpu`: renderer refactored** — geometry building extracted to `geometry.rs`
+  (`build_geometry`), render passes to `exec.rs`; `WgpuBackend` gains a persistent solid vertex
+  buffer (reused across frames, grown on demand) and per-frame `FrameStats`.
+
+- **`oxiui-iced`: `a11y_bridge` module added** — accessibility tree integration for the iced
+  adapter; `IcedUiCtx` now exposes a11y node emission.
+
+- **`oxiui-egui`**: accessibility integration tests (`tests/a11y_integration_tests.rs`),
+  snapshot tests, styled-text and table integration tests added.
+
+- Workspace `version` bumped from `0.1.0` to `0.1.1`; `oxiui-compute-wgpu` added as the 14th
+  workspace member.
+
+---
+
 ## [0.1.0] — 2026-06-01
 
 Initial release of the OxiUI workspace — 13 crates, ~37 000 Rust SLOC,
@@ -49,3 +214,5 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - MSRV: 1.89 (cascaded from oxitext M5 via `wide 1.4.0`).
 - License: Apache-2.0.
 - No `unwrap()` in production code.
+
+[0.1.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.1

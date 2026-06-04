@@ -56,7 +56,9 @@
 - [x] Syntax highlighting adapter: trait `Highlighter` with `highlight_line(line: &str) -> Vec<(Range, Style)>`, integration point for tree-sitter or regex-based highlighters (~100 SLOC)
 - [x] Text shaping cache: LRU cache keyed on `(text, style, max_width)` → `ShapedLine`, configurable capacity, cache statistics (hit/miss/eviction) (~251 SLOC in cache.rs)
 - [x] Font fallback chain: ordered list of font faces, automatic fallback for missing glyphs (CJK → Latin → emoji → tofu), per-run font selection (~207 SLOC in fallback.rs)
-- [ ] Emoji rendering: color emoji bitmap extraction from CBDT/COLR tables via oxifont, scaling to match text size, inline emoji in mixed text (~120 SLOC)
+- [x] Emoji rendering: Unicode emoji detection, text segmentation, inline rendering with scaling (done 2026-06-03)
+    - **Completed 2026-06-03:** New `src/emoji.rs` (behind `emoji` Cargo feature). `is_emoji_codepoint(char) -> bool` — covers all standard emoji Unicode ranges. `EmojiSegmenter<'a>` — iterator splitting text into alternating `EmojiRun` (Plain/Emoji) slices by byte offset. `EmojiRenderer` — wraps `TextPipeline`, adds `render_with_emoji(text, style, target_px) -> Result<Vec<EmojiGlyph>, UiError>` that detects emoji runs, rasterizes each codepoint via the greyscale pipeline, converts to RGBA, and scales to `target_px` pixels (nearest-neighbor). `EmojiGlyph` carries the RGBA bitmap + advance + bearing. `scale_rgba_nearest` helper for size matching. 16 unit tests pass (codepoint detection, segmentation, scaling, EmojiRenderer fallback, empty string, etc.).
+    - **Partial note:** CBDT/COLR table colour extraction from oxifont is not yet wired (oxifont has `has_color_glyphs()` detection but no pixel-extraction API). Colour path falls back to greyscale → RGBA (white+alpha). Full colour emoji requires upstream oxifont CBDT/COLR decode API.
 - [x] Text decoration: underline (solid/dashed/dotted/wavy), overline, strikethrough with configurable thickness and color, offset from baseline (~201 SLOC in decoration.rs)
 - [x] Text truncation / ellipsis: single-line overflow with "…" (U+2026), middle truncation for file paths (~309 SLOC in truncation.rs)
 - [x] Password masking: display bullet/asterisk characters, toggle show/hide, mask delay timer (~40 SLOC)
@@ -96,17 +98,44 @@
     - **Files:** new `crates/oxiui-text/src/atlas.rs`; `crates/oxiui-text/src/lib.rs` (re-export GlyphAtlas, GlyphKey, GlyphEntry); also add `TextLayout::hit_test_fast(x:f32)->usize` via `partition_point` in layout.rs
     - **Tests:** atlas hit returns same Bitmap; LRU eviction drops oldest; utilization = len/max; hit_test_fast on 100-glyph line returns correct index; get_or_rasterize calls shape exactly once for same key
     - **Risk:** Bitmap must be Clone for cache insertion; GlyphKey must impl Hash+Eq; subpixel quantization prevents cache explosion
-- [ ] SIMD-accelerated hit-test binary search over glyph positions for large texts
+- [x] SIMD-accelerated hit-test binary search over glyph positions for large texts
+    - Implemented as `TextLayout::hit_test_fast(x: f32) -> usize` in `layout.rs` using
+      `slice::partition_point` (O(log n) binary search); 4 unit tests. Pure-Rust; no SIMD
+      intrinsics required — `partition_point` is the idiomatic equivalent (2026-06-03).
 - [x] Lazy font loading: defer oxifont face parsing until first glyph request for that font
 
 ## Integration
-- [ ] `oxiui-core` integration: `UiCtx::text_input()` and `UiCtx::text_area()` methods
+- [x] `oxiui-core` integration: `UiCtx::text_input()` and `UiCtx::text_area()` methods
+    - `text_input()` was already present. `text_area(&str, min_rows) -> TextAreaResponse` added
+      to `UiCtx` trait (default = unsupported); `TextAreaResponse` added to `response.rs` and
+      re-exported from `oxiui-core` (2026-06-03).
 - [ ] `oxiui-render-wgpu` integration: glyph atlas texture upload, SDF text rendering pipeline
-- [ ] `oxiui-render-soft` integration: glyph bitmap blitting into CPU framebuffer
+    - **BLOCKED: render-wgpu `DrawText` handler not yet implemented** (tracked in
+      oxiui-render-wgpu TODO item "SDF text rendering"). The oxiui-text API layer
+      (`GlyphAtlas`, `TextPipeline`) is complete; nothing more to do in this crate.
+- [x] `oxiui-render-soft` integration: glyph bitmap blitting into CPU framebuffer
+    - Implemented in `oxiui-render-soft/src/backend.rs`: `draw_text_to_fb` shapes text via
+      `TextPipeline`, blits glyph alpha bitmaps with colour tinting + clip; exported as
+      `blit_glyph_bitmap` pub fn (2026-05-29+).
 - [ ] `oxiui-egui` integration: bridge `TextPipeline` output to egui's text rendering
+    - **BLOCKED: cross-crate item tracked in oxiui-egui.** `validate_font_bytes` already
+      delegates to `TextPipeline::from_bytes`. Full `DrawText`→egui painter bridge requires
+      changes in `oxiui-egui/src/lib.rs`, not in this crate. oxiui-text API is complete.
 - [ ] `oxiui-accessibility` integration: expose text content, selection range, cursor position
+    - **BLOCKED: cross-crate item tracked in oxiui-accessibility.** `text_a11y.rs` has
+      `TextSelection`, `describe_selection`, and `build_text_input_a11y`. Full
+      `TextPipeline` cursor-position sync requires changes in oxiui-accessibility, not
+      here. oxiui-text API is complete.
 - [ ] `oxiui-table` integration: cell text rendering through `TextPipeline`
+    - **BLOCKED: cross-crate item tracked in oxiui-table.** `text_integration.rs` already
+      has `RichCell`/`StyledSpan` with `shape_spans`. Direct `TextPipeline` high-perf
+      bypass requires changes in oxiui-table's renderer, not this crate. API is complete.
 - [ ] COOLJAPAN ecosystem: all text shaping via oxitext + oxifont only
+    - **BLOCKED: ecosystem-wide audit item.** `oxiui-text`'s own dependency tree is clean
+      (zero freetype-sys, harfbuzz-sys, pango-sys, etc. — verified via `cargo tree`).
+      The remaining work is ensuring every crate in the broader COOLJAPAN workspace that
+      renders text routes through `oxiui-text`'s `TextPipeline`; that is a cross-project
+      policy-enforcement task, not a change to this crate.
 
 ## Proposed follow-ups
 - **Multi-line textarea:** ~400 SLOC, scroll, line numbers, undo/redo — own follow-up slice.

@@ -21,9 +21,13 @@
 //! iced widget action is generated for them at this milestone. See
 //! [`forward_ime_event`] for the stub that documents the gap.
 
+#[cfg(feature = "a11y")]
+pub mod a11y_bridge;
 pub mod adapter;
 pub mod theme;
 
+#[cfg(feature = "a11y")]
+pub use a11y_bridge::{spec_to_a11y_node, spec_to_a11y_tree, IcedA11yConfig};
 pub use adapter::{
     apply_message, map_iced_key, map_iced_keyboard_event, map_iced_modifiers, oxi_widget,
     spec_fingerprint, IcedConfig, IcedNullCtx, IcedSpan, IcedUiCtx, Message, OxiIcedWidget,

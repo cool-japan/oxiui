@@ -29,62 +29,77 @@
 //! [`RenderBackend`]: oxiui_core::paint::RenderBackend
 
 use oxiui_core::geometry::Size;
-use oxiui_core::paint::{DrawCommand, DrawList, GradientStop, RenderBackend};
+use oxiui_core::paint::{DrawList, RenderBackend};
 use oxiui_core::{Color, UiError};
 use wgpu::util::DeviceExt;
 
-use crate::clip::{ClipRect, ClipStack};
-use crate::gpu::buffer::{
-    push_circle_quad, push_ellipse_quad, push_gradient_quad, push_line_quad, push_rect_quad,
-    push_rounded_rect_per_corner_quad, push_rounded_rect_quad, Globals, GradientUniforms,
-    GradientVertex, LineQuadParams, Vertex, MAX_GRADIENT_STOPS,
-};
+use crate::gpu::buffer::Globals;
 use crate::gpu::device::GpuContext;
-use crate::gpu::pipeline::{GradientPipeline, SolidPipeline};
-use crate::gpu::tessellator::{tessellate_fill, tessellate_stroke};
-
-// ── DrawSegment ───────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, Debug)]
-struct DrawSegment {
-    start: u32,
-    end: u32,
-    scissor: Option<[u32; 4]>,
-}
-
-// ── GradientDraw ──────────────────────────────────────────────────────────────
-
-struct GradientDraw {
-    verts: Vec<GradientVertex>,
-    uniforms: GradientUniforms,
-    scissor: Option<[u32; 4]>,
-}
+use crate::gpu::exec::{
+    run_gradient_pass_batched, run_solid_pass, run_textured_pass, FrameStats, GradientPassParams,
+    SolidPassParams, TexturedPassParams,
+};
+use crate::gpu::geometry::build_geometry;
+use crate::gpu::pipeline::{
+    BlurPipeline, CompositePipeline, GradientPipeline, SolidPipeline, TexturedPipeline,
+};
 
 // ── WgpuBackend ───────────────────────────────────────────────────────────────
 
 /// Headless GPU backend implementing [`RenderBackend`].
 pub struct WgpuBackend {
     ctx: GpuContext,
+    /// Screen solid pipeline — uses `ctx.sample_count` (may be MSAA).
     pipeline: SolidPipeline,
     gradient_pipeline: GradientPipeline,
+    textured_pipeline: TexturedPipeline,
+    /// Shadow offscreen blur pipeline — always count=1 (ping/pong are count=1).
+    blur_pipeline: BlurPipeline,
+    /// Shadow composite pipeline — uses `ctx.sample_count` (must match screen target).
+    composite_pipeline: CompositePipeline,
+    /// Shadow mask solid pipeline — always count=1 (ping target is count=1).
+    solid_mask_pipeline: SolidPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     clear_color: Color,
+    /// Per-frame statistics populated by the most recent `execute()` call.
+    last_frame_stats: FrameStats,
+    /// Persistent solid vertex buffer (reused across frames, grown on demand).
+    solid_vertex_buf: Option<wgpu::Buffer>,
+    /// Byte capacity of `solid_vertex_buf`.
+    solid_vertex_buf_capacity: usize,
 }
 
 impl WgpuBackend {
     /// Initialise a headless backend with an offscreen target of
-    /// `width × height` physical pixels.
+    /// `width × height` physical pixels, using the provided
+    /// [`crate::quality::RenderQuality`] to determine the MSAA sample count.
+    ///
+    /// Screen pipelines (solid, gradient, textured, composite) are created with
+    /// the effective sample count from `quality`.  Shadow offscreen pipelines
+    /// (blur and solid_mask) are always count=1 because ping-pong textures are
+    /// always single-sample.
     ///
     /// # Errors
     ///
     /// Returns [`UiError::Unsupported`] when no GPU adapter is available (so
     /// the caller can skip on a machine without a usable GPU), or
     /// [`UiError::Backend`] when device creation fails.
-    pub fn headless(width: u32, height: u32) -> Result<Self, UiError> {
-        let ctx = GpuContext::headless(width, height)?;
-        let pipeline = SolidPipeline::new(&ctx.device);
-        let gradient_pipeline = GradientPipeline::new(&ctx.device);
+    pub fn headless_with_quality(
+        width: u32,
+        height: u32,
+        quality: &crate::RenderQuality,
+    ) -> Result<Self, UiError> {
+        let sc = quality.sample_count();
+        let ctx = GpuContext::headless_with_sample_count(width, height, sc)?;
+        // Screen pipelines use the effective sample count.
+        let pipeline = SolidPipeline::new(&ctx.device, ctx.sample_count);
+        let gradient_pipeline = GradientPipeline::new(&ctx.device, ctx.sample_count);
+        let textured_pipeline = TexturedPipeline::new(&ctx.device, ctx.sample_count);
+        let composite_pipeline = CompositePipeline::new(&ctx.device, ctx.sample_count);
+        // Shadow offscreen pipelines MUST be count=1 (ping/pong are count=1 textures).
+        let blur_pipeline = BlurPipeline::new(&ctx.device, 1);
+        let solid_mask_pipeline = SolidPipeline::new(&ctx.device, 1);
 
         let globals = Globals::new(width, height);
         let globals_buffer = ctx
@@ -108,10 +123,42 @@ impl WgpuBackend {
             ctx,
             pipeline,
             gradient_pipeline,
+            textured_pipeline,
+            blur_pipeline,
+            composite_pipeline,
+            solid_mask_pipeline,
             globals_buffer,
             globals_bind_group,
             clear_color: Color(0, 0, 0, 0),
+            last_frame_stats: FrameStats::default(),
+            solid_vertex_buf: None,
+            solid_vertex_buf_capacity: 0,
         })
+    }
+
+    /// Initialise a headless backend with an offscreen target of
+    /// `width × height` physical pixels, using [`crate::quality::RenderQuality::low`] (no
+    /// MSAA, sample_count=1).
+    ///
+    /// This is the backward-compatible entry point.  It delegates to
+    /// [`headless_with_quality`] with `RenderQuality::low()`, so existing
+    /// callers receive the exact same code path as before MSAA support was
+    /// added.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UiError::Unsupported`] when no GPU adapter is available (so
+    /// the caller can skip on a machine without a usable GPU), or
+    /// [`UiError::Backend`] when device creation fails.
+    ///
+    /// [`headless_with_quality`]: WgpuBackend::headless_with_quality
+    pub fn headless(width: u32, height: u32) -> Result<Self, UiError> {
+        Self::headless_with_quality(width, height, &crate::RenderQuality::low())
+    }
+
+    /// Returns a reference to the underlying [`GpuContext`].
+    pub fn ctx(&self) -> &GpuContext {
+        &self.ctx
     }
 
     /// Set the colour the offscreen target is cleared to before each frame.
@@ -134,263 +181,15 @@ impl WgpuBackend {
         self.ctx.height
     }
 
-    fn scissor_from_stack(&self, stack: &ClipStack) -> Option<[u32; 4]> {
-        let raw = stack.as_scissor()?;
-        Some(self.clamp_scissor(raw))
-    }
-
-    fn clamp_scissor(&self, [x, y, w, h]: [u32; 4]) -> [u32; 4] {
-        let x = x.min(self.ctx.width);
-        let y = y.min(self.ctx.height);
-        let w = w.min(self.ctx.width - x);
-        let h = h.min(self.ctx.height - y);
-        [x, y, w, h]
-    }
-
-    fn build_geometry(
-        &self,
-        list: &DrawList,
-    ) -> (Vec<Vertex>, Vec<DrawSegment>, Vec<GradientDraw>) {
-        let mut verts: Vec<Vertex> = Vec::new();
-        let mut segments: Vec<DrawSegment> = Vec::new();
-        let mut gradient_draws: Vec<GradientDraw> = Vec::new();
-        let mut stack = ClipStack::new();
-
-        let mut current_scissor = self.scissor_from_stack(&stack);
-        let mut segment_start: u32 = 0;
-
-        let flush = |segs: &mut Vec<DrawSegment>, start: u32, end: u32, sc: Option<[u32; 4]>| {
-            if end > start {
-                segs.push(DrawSegment {
-                    start,
-                    end,
-                    scissor: sc,
-                });
-            }
-        };
-
-        for cmd in list.iter() {
-            match cmd {
-                DrawCommand::PushClip { rect } => {
-                    flush(
-                        &mut segments,
-                        segment_start,
-                        verts.len() as u32,
-                        current_scissor,
-                    );
-                    stack.push(ClipRect::new(
-                        rect.left(),
-                        rect.top(),
-                        rect.width(),
-                        rect.height(),
-                    ));
-                    current_scissor = self.scissor_from_stack(&stack);
-                    segment_start = verts.len() as u32;
-                }
-                DrawCommand::PopClip => {
-                    flush(
-                        &mut segments,
-                        segment_start,
-                        verts.len() as u32,
-                        current_scissor,
-                    );
-                    stack.pop();
-                    current_scissor = self.scissor_from_stack(&stack);
-                    segment_start = verts.len() as u32;
-                }
-                DrawCommand::FillRect { rect, color } => {
-                    push_rect_quad(
-                        &mut verts,
-                        rect.left(),
-                        rect.top(),
-                        rect.width(),
-                        rect.height(),
-                        *color,
-                    );
-                }
-                DrawCommand::StrokeRect {
-                    rect,
-                    thickness,
-                    color,
-                } => {
-                    emit_stroke_rect(
-                        &mut verts,
-                        rect.left(),
-                        rect.top(),
-                        rect.width(),
-                        rect.height(),
-                        *thickness,
-                        *color,
-                    );
-                }
-                DrawCommand::FillRoundedRect {
-                    rect,
-                    radius,
-                    color,
-                } => {
-                    push_rounded_rect_quad(
-                        &mut verts,
-                        rect.left(),
-                        rect.top(),
-                        rect.width(),
-                        rect.height(),
-                        *radius,
-                        *color,
-                    );
-                }
-                DrawCommand::FillRoundedRectPerCorner { rect, radii, color } => {
-                    push_rounded_rect_per_corner_quad(
-                        &mut verts,
-                        rect.left(),
-                        rect.top(),
-                        rect.width(),
-                        rect.height(),
-                        *radii,
-                        *color,
-                    );
-                }
-                DrawCommand::FillCircle {
-                    center,
-                    radius,
-                    color,
-                } => {
-                    push_circle_quad(&mut verts, center.x, center.y, *radius, *color);
-                }
-                DrawCommand::FillEllipse {
-                    center,
-                    rx,
-                    ry,
-                    color,
-                } => {
-                    push_ellipse_quad(&mut verts, center.x, center.y, *rx, *ry, *color);
-                }
-                DrawCommand::Line { from, to, color } => {
-                    push_line_quad(
-                        &mut verts,
-                        LineQuadParams {
-                            from_x: from.x,
-                            from_y: from.y,
-                            to_x: to.x,
-                            to_y: to.y,
-                            half_width: 0.5,
-                            color: *color,
-                            aa_smooth: false,
-                        },
-                    );
-                }
-                DrawCommand::LineAa { from, to, color } => {
-                    push_line_quad(
-                        &mut verts,
-                        LineQuadParams {
-                            from_x: from.x,
-                            from_y: from.y,
-                            to_x: to.x,
-                            to_y: to.y,
-                            half_width: 0.5,
-                            color: *color,
-                            aa_smooth: true,
-                        },
-                    );
-                }
-                DrawCommand::LineThick {
-                    from,
-                    to,
-                    width,
-                    color,
-                } => {
-                    push_line_quad(
-                        &mut verts,
-                        LineQuadParams {
-                            from_x: from.x,
-                            from_y: from.y,
-                            to_x: to.x,
-                            to_y: to.y,
-                            half_width: width * 0.5,
-                            color: *color,
-                            aa_smooth: true,
-                        },
-                    );
-                }
-                DrawCommand::LineDashed {
-                    from,
-                    to,
-                    dash_len,
-                    gap_len,
-                    color,
-                } => {
-                    emit_dashed_line(
-                        &mut verts,
-                        DashedLineParams {
-                            x0: from.x,
-                            y0: from.y,
-                            x1: to.x,
-                            y1: to.y,
-                            dash_len: *dash_len,
-                            gap_len: *gap_len,
-                            color: *color,
-                        },
-                    );
-                }
-                DrawCommand::FillPath { path, color } => {
-                    tessellate_fill(&mut verts, path, *color);
-                }
-                DrawCommand::StrokePath { path, style, color } => {
-                    tessellate_stroke(&mut verts, path, style, *color);
-                }
-                DrawCommand::LinearGradient {
-                    rect,
-                    start,
-                    end,
-                    stops,
-                } => {
-                    if let Some(gd) = build_gradient_draw_linear(LinearGradientParams {
-                        x: rect.left(),
-                        y: rect.top(),
-                        w: rect.width(),
-                        h: rect.height(),
-                        sx: start.x,
-                        sy: start.y,
-                        ex: end.x,
-                        ey: end.y,
-                        stops,
-                        scissor: current_scissor,
-                    }) {
-                        gradient_draws.push(gd);
-                    }
-                }
-                DrawCommand::RadialGradient {
-                    rect,
-                    center,
-                    radius,
-                    stops,
-                } => {
-                    if let Some(gd) = build_gradient_draw_radial(RadialGradientParams {
-                        x: rect.left(),
-                        y: rect.top(),
-                        w: rect.width(),
-                        h: rect.height(),
-                        cx: center.x,
-                        cy: center.y,
-                        radius: *radius,
-                        stops,
-                        scissor: current_scissor,
-                    }) {
-                        gradient_draws.push(gd);
-                    }
-                }
-                // Image, NineSlice, BoxShadow, DrawText: deferred (require
-                // texture-atlas / blur pipeline — out of scope for this slice).
-                _ => {}
-            }
-        }
-
-        flush(
-            &mut segments,
-            segment_start,
-            verts.len() as u32,
-            current_scissor,
-        );
-        (verts, segments, gradient_draws)
+    /// Return the per-frame statistics populated by the most recent
+    /// [`execute`] call.
+    ///
+    /// Statistics are reset to zero at the start of each `execute()` and
+    /// incrementally updated as GPU passes are issued.
+    ///
+    /// [`execute`]: WgpuBackend::execute
+    pub fn frame_stats(&self) -> FrameStats {
+        self.last_frame_stats
     }
 
     /// Read the offscreen colour target back into a tightly packed
@@ -475,6 +274,36 @@ impl WgpuBackend {
         let idx = ((y * self.ctx.width + x) * 4) as usize;
         Ok(Some((buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3])))
     }
+
+    /// Resize the headless offscreen target to `new_width × new_height` pixels.
+    ///
+    /// Recreates only the offscreen colour texture (and the MSAA texture if
+    /// active).  The `wgpu::Device`, `Queue`, and compiled pipelines are
+    /// preserved — only size-dependent GPU resources are rebuilt.
+    ///
+    /// All texture views obtained from this backend before the resize become
+    /// invalid and must not be used afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UiError::Unsupported`] if either dimension is zero.
+    pub fn resize(&mut self, new_width: u32, new_height: u32) -> Result<(), UiError> {
+        // Resize the colour textures in-place (device/queue/pipelines unchanged).
+        self.ctx.resize(new_width, new_height)?;
+
+        // Update the globals uniform buffer with the new viewport size.
+        let globals = Globals::new(new_width, new_height);
+        self.ctx
+            .queue
+            .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
+
+        // Invalidate the persistent solid vertex buffer so it is reallocated on
+        // the next frame (the old buffer remains valid; we just stop using it).
+        self.solid_vertex_buf = None;
+        self.solid_vertex_buf_capacity = 0;
+
+        Ok(())
+    }
 }
 
 // ── RenderBackend impl ────────────────────────────────────────────────────────
@@ -492,13 +321,34 @@ impl RenderBackend for WgpuBackend {
         true
     }
 
+    fn supports_images(&self) -> bool {
+        true
+    }
+
+    fn supports_blur(&self) -> bool {
+        true
+    }
+
+    fn supports_blend_modes(&self) -> bool {
+        true
+    }
+
+    fn supports_backdrop_blur(&self) -> bool {
+        true
+    }
+
     fn execute(&mut self, list: &DrawList) -> Result<(), UiError> {
+        // Reset per-frame stats at the start of each execute().
+        self.last_frame_stats = FrameStats::default();
+
+        // Update the viewport globals uniform.
         let globals = Globals::new(self.ctx.width, self.ctx.height);
         self.ctx
             .queue
             .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
-        let (verts, segments, gradient_draws) = self.build_geometry(list);
+        let (verts, segments, gradient_draws, textured_draws, _backdrop_blur_draws) =
+            build_geometry(list, self.ctx.width, self.ctx.height);
 
         let clear = self.clear_color;
         let clear_value = wgpu::Color {
@@ -508,35 +358,30 @@ impl RenderBackend for WgpuBackend {
             a: clear.3 as f64 / 255.0,
         };
 
-        let vertex_buffer = if verts.is_empty() {
-            None
-        } else {
-            Some(
+        // Obtain the screen colour attachment.  Under MSAA this is
+        // (msaa_view, Some(color_view)); under no MSAA it is (color_view, None).
+        let (screen_view, screen_resolve) = self.ctx.color_attachment();
+
+        // ── Pass 0: Dedicated clear ───────────────────────────────────────────
+        // We separate the clear from the solid draw pass so that shadow passes
+        // (which use LoadOp::Load) can composite onto the cleared target *before*
+        // the solid/gradient/textured content is drawn on top.
+        //
+        // Under MSAA we clear the MSAA surface directly so the resolve target
+        // also ends up cleared after any subsequent resolve.
+        {
+            let mut encoder =
                 self.ctx
                     .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("oxiui-render-wgpu solid verts"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-            )
-        };
-
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("oxiui-render-wgpu frame encoder"),
-            });
-
-        // ── Solid pass ────────────────────────────────────────────────────────
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("oxiui-render-wgpu solid pass"),
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("oxiui-render-wgpu clear encoder"),
+                    });
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxiui-render-wgpu clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.ctx.color_view,
+                    view: screen_view,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: screen_resolve,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear_value),
                         store: wgpu::StoreOp::Store,
@@ -547,262 +392,114 @@ impl RenderBackend for WgpuBackend {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-
-            if let Some(ref vb) = vertex_buffer {
-                pass.set_pipeline(&self.pipeline.pipeline);
-                pass.set_bind_group(0, &self.globals_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-
-                for seg in &segments {
-                    match seg.scissor {
-                        Some([_, _, 0, _]) | Some([_, _, _, 0]) => continue,
-                        Some([x, y, w, h]) => pass.set_scissor_rect(x, y, w, h),
-                        None => pass.set_scissor_rect(0, 0, self.ctx.width, self.ctx.height),
-                    }
-                    pass.draw(seg.start..seg.end, 0..1);
-                }
-            }
+            // No draws — clear only.
+            drop(_pass);
+            self.ctx.queue.submit(Some(encoder.finish()));
         }
+        // Count the clear pass.
+        self.last_frame_stats.render_passes += 1;
 
-        // ── Gradient pass (one render pass per gradient draw) ─────────────────
-        for gd in &gradient_draws {
-            if gd.verts.is_empty() {
-                continue;
-            }
+        // ── Passes 1-N: Shadow composites ─────────────────────────────────────
+        // Each shadow submits its own command encoders internally.  These are
+        // submitted before the main-frame encoder so shadows appear under content.
+        //
+        // The shadow composite pass writes to the screen target (which may be
+        // the MSAA surface when MSAA is active), so we pass both `screen_view`
+        // and `screen_resolve` through `ShadowGpuState`.
+        let shadows = crate::gpu::shadow::collect_shadows(list);
+        let shadow_gpu = crate::gpu::shadow::ShadowGpuState {
+            device: &self.ctx.device,
+            queue: &self.ctx.queue,
+            target_view: screen_view,
+            resolve_target: screen_resolve,
+            globals_buffer: &self.globals_buffer,
+            globals_bind_group: &self.globals_bind_group,
+            viewport_w: self.ctx.width,
+            viewport_h: self.ctx.height,
+        };
+        let shadow_pipelines = crate::gpu::shadow::ShadowPipelines {
+            // Mask pass uses solid_mask_pipeline (count=1, ping is count=1).
+            solid: &self.solid_mask_pipeline,
+            blur: &self.blur_pipeline,
+            // Composite pass uses composite_pipeline (count=ctx.sample_count, writes to screen).
+            composite: &self.composite_pipeline,
+        };
+        let shadow_stats =
+            crate::gpu::shadow::render_shadows(&shadow_gpu, &shadow_pipelines, &shadows)?;
+        self.last_frame_stats.render_passes += shadow_stats.render_passes;
+        self.last_frame_stats.draw_calls += shadow_stats.draw_calls;
 
-            let grad_vb = self
-                .ctx
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("oxiui-render-wgpu gradient verts"),
-                    contents: bytemuck::cast_slice(&gd.verts),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
-            let grad_ub = self
-                .ctx
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("oxiui-render-wgpu gradient uniforms"),
-                    contents: bytemuck::bytes_of(&gd.uniforms),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-
-            let grad_bg = self
-                .ctx
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("oxiui-render-wgpu gradient bg"),
-                    layout: &self.gradient_pipeline.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.globals_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: grad_ub.as_entire_binding(),
-                        },
-                    ],
-                });
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("oxiui-render-wgpu gradient pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.ctx.color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("oxiui-render-wgpu frame encoder"),
             });
 
-            pass.set_pipeline(&self.gradient_pipeline.pipeline);
-            pass.set_bind_group(0, &grad_bg, &[]);
-            pass.set_vertex_buffer(0, grad_vb.slice(..));
+        // Re-borrow after submitting the clear encoder above.
+        let (screen_view2, screen_resolve2) = self.ctx.color_attachment();
 
-            match gd.scissor {
-                Some([_, _, 0, _]) | Some([_, _, _, 0]) => continue,
-                Some([x, y, w, h]) => pass.set_scissor_rect(x, y, w, h),
-                None => pass.set_scissor_rect(0, 0, self.ctx.width, self.ctx.height),
-            }
+        // ── Solid pass (LoadOp::Load — clear already done above) ──────────────
+        let solid_draws = run_solid_pass(SolidPassParams {
+            device: &self.ctx.device,
+            queue: &self.ctx.queue,
+            encoder: &mut encoder,
+            screen_view: screen_view2,
+            screen_resolve: screen_resolve2,
+            pipeline: &self.pipeline,
+            globals_bind_group: &self.globals_bind_group,
+            verts: &verts,
+            segments: &segments,
+            viewport_w: self.ctx.width,
+            viewport_h: self.ctx.height,
+            solid_vertex_buf: &mut self.solid_vertex_buf,
+            solid_vertex_buf_capacity: &mut self.solid_vertex_buf_capacity,
+        });
+        // Count the solid pass itself (it is always opened, even when empty).
+        self.last_frame_stats.render_passes += 1;
+        self.last_frame_stats.draw_calls += solid_draws;
 
-            pass.draw(0..gd.verts.len() as u32, 0..1);
+        // ── Gradient pass (all gradient draws coalesced into one pass) ────────
+        {
+            let (sv, sr) = self.ctx.color_attachment();
+            let (rp, dc) = run_gradient_pass_batched(GradientPassParams {
+                device: &self.ctx.device,
+                queue: &self.ctx.queue,
+                encoder: &mut encoder,
+                screen_view: sv,
+                screen_resolve: sr,
+                pipeline: &self.gradient_pipeline,
+                globals_buffer: &self.globals_buffer,
+                gradient_draws: &gradient_draws,
+                viewport_w: self.ctx.width,
+                viewport_h: self.ctx.height,
+            });
+            self.last_frame_stats.render_passes += rp;
+            self.last_frame_stats.draw_calls += dc;
+        }
+
+        // ── Textured pass (one render pass per textured draw) ─────────────────
+        for td in &textured_draws {
+            let (sv, sr) = self.ctx.color_attachment();
+            let (rp, dc) = run_textured_pass(TexturedPassParams {
+                device: &self.ctx.device,
+                queue: &self.ctx.queue,
+                encoder: &mut encoder,
+                screen_view: sv,
+                screen_resolve: sr,
+                pipeline: &self.textured_pipeline,
+                globals_bind_group: &self.globals_bind_group,
+                td,
+                viewport_w: self.ctx.width,
+                viewport_h: self.ctx.height,
+            })?;
+            self.last_frame_stats.render_passes += rp;
+            self.last_frame_stats.draw_calls += dc;
         }
 
         self.ctx.queue.submit(Some(encoder.finish()));
         Ok(())
     }
-}
-
-// ── Geometry helpers ──────────────────────────────────────────────────────────
-
-fn emit_stroke_rect(out: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32, t: f32, color: Color) {
-    push_rect_quad(out, x, y, w, t, color);
-    push_rect_quad(out, x, y + h - t, w, t, color);
-    push_rect_quad(out, x, y + t, t, h - 2.0 * t, color);
-    push_rect_quad(out, x + w - t, y + t, t, h - 2.0 * t, color);
-}
-
-struct DashedLineParams {
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    dash_len: f32,
-    gap_len: f32,
-    color: Color,
-}
-
-fn emit_dashed_line(out: &mut Vec<Vertex>, p: DashedLineParams) {
-    let DashedLineParams {
-        x0,
-        y0,
-        x1,
-        y1,
-        dash_len,
-        gap_len,
-        color,
-    } = p;
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let total = (dx * dx + dy * dy).sqrt();
-    if total < 1e-6 || dash_len <= 0.0 {
-        return;
-    }
-    let ux = dx / total;
-    let uy = dy / total;
-    let period = dash_len + gap_len.max(0.0);
-    if period < 1e-6 {
-        return;
-    }
-    let mut t = 0.0_f32;
-    while t < total {
-        let end = (t + dash_len).min(total);
-        push_line_quad(
-            out,
-            LineQuadParams {
-                from_x: x0 + ux * t,
-                from_y: y0 + uy * t,
-                to_x: x0 + ux * end,
-                to_y: y0 + uy * end,
-                half_width: 0.5,
-                color,
-                aa_smooth: false,
-            },
-        );
-        t += period;
-    }
-}
-
-struct LinearGradientParams<'a> {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    sx: f32,
-    sy: f32,
-    ex: f32,
-    ey: f32,
-    stops: &'a [GradientStop],
-    scissor: Option<[u32; 4]>,
-}
-
-fn build_gradient_draw_linear(p: LinearGradientParams<'_>) -> Option<GradientDraw> {
-    let LinearGradientParams {
-        x,
-        y,
-        w,
-        h,
-        sx,
-        sy,
-        ex,
-        ey,
-        stops,
-        scissor,
-    } = p;
-    let uniforms = build_gradient_uniforms(0, [sx, sy], [ex, ey], 0.0, stops)?;
-    let mut verts = Vec::new();
-    push_gradient_quad(&mut verts, x, y, w, h);
-    Some(GradientDraw {
-        verts,
-        uniforms,
-        scissor,
-    })
-}
-
-struct RadialGradientParams<'a> {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    cx: f32,
-    cy: f32,
-    radius: f32,
-    stops: &'a [GradientStop],
-    scissor: Option<[u32; 4]>,
-}
-
-fn build_gradient_draw_radial(p: RadialGradientParams<'_>) -> Option<GradientDraw> {
-    let RadialGradientParams {
-        x,
-        y,
-        w,
-        h,
-        cx,
-        cy,
-        radius,
-        stops,
-        scissor,
-    } = p;
-    let uniforms = build_gradient_uniforms(1, [cx, cy], [0.0, 0.0], radius, stops)?;
-    let mut verts = Vec::new();
-    push_gradient_quad(&mut verts, x, y, w, h);
-    Some(GradientDraw {
-        verts,
-        uniforms,
-        scissor,
-    })
-}
-
-fn build_gradient_uniforms(
-    gradient_type: u32,
-    p0: [f32; 2],
-    p1: [f32; 2],
-    radius: f32,
-    stops: &[GradientStop],
-) -> Option<GradientUniforms> {
-    if stops.is_empty() {
-        return None;
-    }
-    let count = stops.len().min(MAX_GRADIENT_STOPS);
-    let mut stop_offsets = [[0.0f32; 4]; MAX_GRADIENT_STOPS];
-    let mut stop_colors = [[0.0f32; 4]; MAX_GRADIENT_STOPS];
-    for (i, s) in stops.iter().take(count).enumerate() {
-        stop_offsets[i] = [s.offset, 0.0, 0.0, 0.0];
-        stop_colors[i] = [
-            s.color.0 as f32 / 255.0,
-            s.color.1 as f32 / 255.0,
-            s.color.2 as f32 / 255.0,
-            s.color.3 as f32 / 255.0,
-        ];
-    }
-    Some(GradientUniforms {
-        p0,
-        p1,
-        radius,
-        gradient_type,
-        stop_count: count as u32,
-        _pad: 0,
-        stop_offsets,
-        stop_colors,
-    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -811,8 +508,108 @@ fn build_gradient_uniforms(
 mod tests {
     use super::*;
     use oxiui_core::geometry::{Point, Rect};
-    use oxiui_core::paint::{DrawList, GradientStop, PathData, StrokeStyle};
+    use oxiui_core::paint::{DrawCommand, DrawList, FillRule, GradientStop, PathData, StrokeStyle};
     use oxiui_core::Color;
+
+    // ── MSAA tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn msaa_smooths_diagonal_edge() {
+        // Build a 4x MSAA backend. If MSAA is not supported by the adapter, we
+        // may get sample_count=1 (fallback), in which case we skip the
+        // intermediate-alpha assertion but still pass.
+        let Some(mut b) =
+            WgpuBackend::headless_with_quality(64, 64, &crate::RenderQuality::balanced()).ok()
+        else {
+            return;
+        };
+        let mut list = DrawList::new();
+        // Draw a filled right-triangle with a 45° diagonal edge.
+        let red = Color(255, 0, 0, 255);
+        let mut path = PathData::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(63.0, 0.0));
+        path.line_to(Point::new(0.0, 63.0));
+        path.close();
+        list.push_path(path, red);
+        b.execute(&list).expect("execute");
+        let buf = b.readback_rgba().expect("readback");
+        let w = b.width();
+        let pixel = |x: u32, y: u32| -> (u8, u8, u8, u8) {
+            let i = ((y * w + x) * 4) as usize;
+            (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+        };
+        if b.ctx().sample_count() > 1 {
+            // With MSAA: at least one diagonal-edge pixel should have
+            // intermediate alpha (0 < a < 255).
+            let mut found_intermediate = false;
+            for d in 5u32..58u32 {
+                let p = pixel(d, d);
+                if p.3 > 0 && p.3 < 255 {
+                    found_intermediate = true;
+                    break;
+                }
+            }
+            assert!(
+                found_intermediate,
+                "MSAA should produce intermediate-alpha pixels on diagonal edge"
+            );
+        }
+        // Fully-inside pixel should be full red.
+        let inside = pixel(5, 5);
+        assert_eq!(inside.3, 255, "inside pixel must be fully opaque");
+    }
+
+    #[test]
+    fn non_msaa_edge_is_hard() {
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        let red = Color(255, 0, 0, 255);
+        let mut path = PathData::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(63.0, 0.0));
+        path.line_to(Point::new(0.0, 63.0));
+        path.close();
+        list.push_path(path, red);
+        b.execute(&list).expect("execute");
+        let buf = b.readback_rgba().expect("readback");
+        let w = b.width();
+        // No MSAA: all pixels on the diagonal must be either fully opaque or
+        // fully transparent.
+        for d in 0u32..64u32 {
+            let i = ((d * w + d) * 4) as usize;
+            let a = buf[i + 3];
+            assert!(
+                a == 0 || a == 255,
+                "non-MSAA edge pixel at ({d},{d}) must be 0 or 255, got {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn msaa_default_path_unchanged() {
+        // headless() = RenderQuality::low() = msaa=1 → sample_count=1,
+        // byte-identical path.
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        assert_eq!(
+            b.ctx().sample_count(),
+            1,
+            "headless() must use sample_count=1"
+        );
+        let mut list = DrawList::new();
+        list.push_rect(Rect::new(10.0, 10.0, 20.0, 20.0), Color(255, 0, 0, 255));
+        b.execute(&list).expect("execute");
+        let px = b.read_pixel(20, 20).expect("read").expect("pixel");
+        assert_eq!(
+            (px.0, px.1, px.2, px.3),
+            (255, 0, 0, 255),
+            "basic rect fill must still work"
+        );
+    }
 
     fn try_backend(w: u32, h: u32) -> Option<WgpuBackend> {
         WgpuBackend::headless(w, h).ok()
@@ -1016,5 +813,510 @@ mod tests {
         };
         assert!(b.supports_gradients());
         assert!(b.supports_paths());
+    }
+
+    #[test]
+    fn image_solid_fill_readback() {
+        use oxiui_core::paint::{DrawList, ImageData, ImageFilter};
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        // 2x2 solid red image
+        let image = ImageData::new(
+            vec![
+                255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+            ],
+            2,
+            2,
+        );
+        let mut dl = DrawList::new();
+        dl.push_image(
+            image,
+            Rect::new(12.0, 12.0, 40.0, 40.0),
+            ImageFilter::Nearest,
+        );
+        b.execute(&dl).expect("execute ok");
+        let px = b.read_pixel(32, 32).expect("ok").expect("bounds");
+        assert!(px.0 > 200 && px.3 > 200, "centre should be red: {px:?}");
+        assert_transparent(&b, 2, 2, "outside image");
+    }
+
+    #[test]
+    fn nine_slice_renders() {
+        use oxiui_core::paint::{DrawList, ImageData};
+        let Some(mut b) = try_backend(128, 128) else {
+            return;
+        };
+        // 12x12 image: red corners (4px), blue centre
+        let mut rgba = vec![0u8; 12 * 12 * 4];
+        for y in 0..12u32 {
+            for x in 0..12u32 {
+                let i = ((y * 12 + x) * 4) as usize;
+                let corner = !(4..8).contains(&x) || !(4..8).contains(&y);
+                if corner {
+                    rgba[i] = 255;
+                    rgba[i + 1] = 0;
+                    rgba[i + 2] = 0;
+                    rgba[i + 3] = 255; // red
+                } else {
+                    rgba[i] = 0;
+                    rgba[i + 1] = 0;
+                    rgba[i + 2] = 255;
+                    rgba[i + 3] = 255; // blue
+                }
+            }
+        }
+        let image = ImageData::new(rgba, 12, 12);
+        let mut dl = DrawList::new();
+        dl.push_nine_slice(image, Rect::new(0.0, 0.0, 128.0, 128.0), [4, 4, 4, 4]);
+        b.execute(&dl).expect("execute ok");
+        // Corner region should be reddish
+        let corner = b.read_pixel(2, 2).expect("ok").expect("bounds");
+        assert!(corner.0 > 100, "corner should be reddish: {corner:?}");
+        // Centre region should be bluish
+        let centre = b.read_pixel(64, 64).expect("ok").expect("bounds");
+        assert!(centre.2 > 100, "centre should be bluish: {centre:?}");
+    }
+
+    #[test]
+    fn tex_vertex_size_is_32() {
+        use crate::gpu::buffer::TexVertex;
+        assert_eq!(core::mem::size_of::<TexVertex>(), 32);
+    }
+
+    // ── BoxShadow tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn box_shadow_zero_blur_is_sharp() {
+        let Some(mut b) = try_backend(128, 128) else {
+            return;
+        };
+        let mut dl = DrawList::new();
+        dl.push_shadow(
+            Rect::new(20.0, 20.0, 80.0, 80.0),
+            Point::new(0.0, 0.0),
+            0.0,
+            Color(0, 0, 0, 200),
+        );
+        b.execute(&dl).expect("execute ok");
+        // Interior: shadow visible
+        let interior = b.read_pixel(60, 60).expect("ok").expect("bounds");
+        assert!(interior.3 > 100, "interior should be visible: {interior:?}");
+        // Far outside: transparent
+        let outside = b.read_pixel(5, 5).expect("ok").expect("bounds");
+        assert!(outside.3 == 0, "outside should be transparent: {outside:?}");
+    }
+
+    #[test]
+    fn box_shadow_blur_halo_falloff() {
+        let Some(mut b) = try_backend(200, 200) else {
+            return;
+        };
+        let mut dl = DrawList::new();
+        dl.push_shadow(
+            Rect::new(50.0, 50.0, 100.0, 100.0),
+            Point::new(0.0, 0.0),
+            12.0,
+            Color(0, 0, 0, 255),
+        );
+        b.execute(&dl).expect("execute ok");
+        // Near-interior: high alpha
+        let interior = b.read_pixel(100, 100).expect("ok").expect("bounds");
+        assert!(interior.3 > 100, "interior should be visible: {interior:?}");
+        // Just outside: some alpha (blur halo)
+        let edge = b.read_pixel(45, 100).expect("ok").expect("bounds");
+        // Far outside: low/zero alpha
+        let far = b.read_pixel(5, 5).expect("ok").expect("bounds");
+        assert!(far.3 < edge.3, "falloff: far={far:?} edge={edge:?}");
+    }
+
+    #[test]
+    fn box_shadow_offset_translates() {
+        let Some(mut b) = try_backend(200, 200) else {
+            return;
+        };
+        let mut dl = DrawList::new();
+        dl.push_shadow(
+            Rect::new(50.0, 50.0, 80.0, 80.0),
+            Point::new(20.0, 20.0),
+            0.0,
+            Color(0, 0, 0, 255),
+        );
+        b.execute(&dl).expect("execute ok");
+        // Original rect position (before offset) should be transparent
+        let orig_pos = b.read_pixel(55, 55).expect("ok").expect("bounds");
+        assert!(
+            orig_pos.3 == 0,
+            "original rect pos should be transparent: {orig_pos:?}"
+        );
+        // Offset position should be visible
+        let offset_pos = b.read_pixel(80, 80).expect("ok").expect("bounds");
+        assert!(
+            offset_pos.3 > 100,
+            "offset pos should be visible: {offset_pos:?}"
+        );
+    }
+
+    #[test]
+    fn shadows_render_under_solids() {
+        let Some(mut b) = try_backend(200, 200) else {
+            return;
+        };
+        let mut dl = DrawList::new();
+        // Shadow covering most of the viewport
+        dl.push_shadow(
+            Rect::new(10.0, 10.0, 180.0, 180.0),
+            Point::new(0.0, 0.0),
+            0.0,
+            Color(255, 0, 0, 255), // red shadow
+        );
+        // Blue rect covering the shadow area
+        dl.push(DrawCommand::FillRect {
+            rect: Rect::new(10.0, 10.0, 180.0, 180.0),
+            color: Color(0, 0, 255, 255), // solid blue
+        });
+        b.execute(&dl).expect("execute ok");
+        // The blue rect should be on top — pixel should show blue, not red
+        let px = b.read_pixel(100, 100).expect("ok").expect("bounds");
+        assert!(
+            px.2 > 200 && px.0 < 100,
+            "blue rect should be on top: {px:?}"
+        );
+    }
+
+    #[test]
+    fn fill_path_concave_notch_empty() {
+        // Arrow/chevron shape: concave polygon with a notch at the bottom.
+        // The notch interior pixel should be transparent.
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        let red = Color(255, 0, 0, 255);
+        // Concave polygon (CCW): (5,5) (59,5) (59,59) (32,40) (5,59) — concave at (32,40).
+        let mut path = PathData::new();
+        path.move_to(Point::new(5.0, 5.0));
+        path.line_to(Point::new(59.0, 5.0));
+        path.line_to(Point::new(59.0, 59.0));
+        path.line_to(Point::new(32.0, 40.0)); // concave vertex (notch tip)
+        path.line_to(Point::new(5.0, 59.0));
+        path.close();
+        list.push_path(path, red);
+        b.execute(&list).expect("execute");
+        // Top body pixel should be red.
+        let body = b.read_pixel(32, 10).expect("read").expect("pixel");
+        assert_eq!(body.3, 255, "body should be opaque");
+        // Pixel deep in the notch should be transparent.
+        let notch = b.read_pixel(32, 55).expect("read").expect("pixel");
+        assert_eq!(
+            notch.3, 0,
+            "notch must be transparent (concave fill correct)"
+        );
+    }
+
+    #[test]
+    fn fill_path_donut_hole_empty() {
+        // Outer CCW ring (big square) + inner CW ring (small square) = donut.
+        // Centre pixel must be transparent under NonZero (CW inner = opposite winding → hole).
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        let blue = Color(0, 0, 255, 255);
+        let mut path = PathData::new();
+        // Outer CCW
+        path.move_to(Point::new(4.0, 4.0));
+        path.line_to(Point::new(60.0, 4.0));
+        path.line_to(Point::new(60.0, 60.0));
+        path.line_to(Point::new(4.0, 60.0));
+        path.close();
+        // Inner CW (hole): reversed winding
+        path.move_to(Point::new(20.0, 20.0));
+        path.line_to(Point::new(20.0, 44.0));
+        path.line_to(Point::new(44.0, 44.0));
+        path.line_to(Point::new(44.0, 20.0));
+        path.close();
+        list.push_path(path, blue);
+        b.execute(&list).expect("execute");
+        // Outer ring should be blue.
+        let ring = b.read_pixel(10, 10).expect("read").expect("pixel");
+        assert_eq!(
+            (ring.0, ring.1, ring.2, ring.3),
+            (0, 0, 255, 255),
+            "ring must be blue"
+        );
+        // Hole centre must be transparent.
+        let hole = b.read_pixel(32, 32).expect("read").expect("pixel");
+        assert_eq!(hole.3, 0, "donut hole must be transparent");
+    }
+
+    #[test]
+    fn fill_rule_evenodd_vs_nonzero() {
+        // Same-winding nested rings: outer CCW + inner CCW.
+        // EvenOdd: inner is at depth 1 → hole → inner pixel transparent.
+        // NonZero: inner winding sum = +2 → filled → inner pixel opaque.
+        let Some(mut b_eo) = try_backend(64, 64) else {
+            return;
+        };
+        let Some(mut b_nz) = try_backend(64, 64) else {
+            return;
+        };
+        let make_path = |fill_rule: FillRule| {
+            let mut path = PathData::new().with_fill_rule(fill_rule);
+            // Outer CCW
+            path.move_to(Point::new(4.0, 4.0));
+            path.line_to(Point::new(60.0, 4.0));
+            path.line_to(Point::new(60.0, 60.0));
+            path.line_to(Point::new(4.0, 60.0));
+            path.close();
+            // Inner CCW (same winding as outer)
+            path.move_to(Point::new(20.0, 20.0));
+            path.line_to(Point::new(44.0, 20.0));
+            path.line_to(Point::new(44.0, 44.0));
+            path.line_to(Point::new(20.0, 44.0));
+            path.close();
+            path
+        };
+        let green = Color(0, 255, 0, 255);
+        let mut list_eo = DrawList::new();
+        list_eo.push_path(make_path(FillRule::EvenOdd), green);
+        let mut list_nz = DrawList::new();
+        list_nz.push_path(make_path(FillRule::NonZero), green);
+        b_eo.execute(&list_eo).expect("execute");
+        b_nz.execute(&list_nz).expect("execute");
+        // Inner centre pixel
+        let inner_eo = b_eo.read_pixel(32, 32).expect("read").expect("pixel");
+        let inner_nz = b_nz.read_pixel(32, 32).expect("read").expect("pixel");
+        // EvenOdd: inner CCW ring is at depth 1 → hole → transparent.
+        assert_eq!(
+            inner_eo.3, 0,
+            "EvenOdd: same-winding inner ring must be transparent (depth=1 = hole)"
+        );
+        // NonZero: inner CCW ring winding sum = +1 (outer) + +1 (inner) = +2 ≠ 0 → filled.
+        assert_eq!(
+            inner_nz.3, 255,
+            "NonZero: same-winding inner ring must be opaque (winding=2 ≠ 0)"
+        );
+    }
+
+    // ── Visibility culling tests ───────────────────────────────────────────────
+
+    #[test]
+    fn culled_offscreen_rect_is_transparent() {
+        // A FillRect placed entirely outside the active clip region should
+        // produce no visible pixels — the visibility culling optimisation
+        // must discard it before vertices are emitted.
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        // Active clip: top-left 32×32 quadrant.
+        list.push_clip(Rect::new(0.0, 0.0, 32.0, 32.0));
+        // Draw a rect entirely in the bottom-right quadrant → outside the clip.
+        list.push_rect(Rect::new(40.0, 40.0, 20.0, 20.0), Color(255, 0, 0, 255));
+        list.pop_clip();
+        b.execute(&list).expect("execute");
+        // Pixel inside the culled rect should remain transparent.
+        let px = b.read_pixel(45, 45).expect("read").expect("pixel");
+        assert_eq!(px.3, 0, "rect outside clip must be culled (transparent)");
+        // Pixel in the clipped-but-undrawn top-left region also stays transparent.
+        let px2 = b.read_pixel(10, 10).expect("read").expect("pixel");
+        assert_eq!(px2.3, 0, "undrawn area must remain transparent");
+    }
+
+    #[test]
+    fn culling_does_not_affect_visible_rect() {
+        // Verify that visibility culling does not accidentally discard a rect
+        // that lies within the viewport (no active scissor → no culling).
+        let Some(mut b) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        list.push_rect(Rect::new(10.0, 10.0, 40.0, 40.0), Color(0, 255, 0, 255));
+        b.execute(&list).expect("execute");
+        let px = b.read_pixel(30, 30).expect("read").expect("pixel");
+        assert_eq!(
+            (px.0, px.1, px.2, px.3),
+            (0, 255, 0, 255),
+            "visible rect must not be culled"
+        );
+    }
+
+    // ── FrameStats tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn frame_stats_counts_solid_draws() {
+        let Some(mut backend) = try_backend(64, 64) else {
+            return;
+        };
+        // One solid rect with no clip changes = one DrawSegment = one draw
+        let mut list = DrawList::new();
+        list.push(DrawCommand::FillRect {
+            rect: Rect::new(10.0, 10.0, 44.0, 44.0),
+            color: Color(255, 0, 0, 255),
+        });
+        backend.execute(&list).expect("execute failed");
+        let stats = backend.frame_stats();
+        assert!(stats.draw_calls >= 1, "should have at least 1 draw call");
+        assert!(
+            stats.render_passes >= 1,
+            "should have at least 1 render pass"
+        );
+    }
+
+    // ── R2: Draw-call batching tests ─────────────────────────────────────────
+
+    #[test]
+    fn two_gradients_one_pass() {
+        let Some(mut backend) = try_backend(128, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        // Left half: linear gradient red→blue
+        list.push(DrawCommand::LinearGradient {
+            rect: Rect::new(0.0, 0.0, 64.0, 64.0),
+            start: Point::new(0.0, 0.0),
+            end: Point::new(64.0, 0.0),
+            stops: vec![
+                GradientStop::new(0.0, Color(255, 0, 0, 255)),
+                GradientStop::new(1.0, Color(0, 0, 255, 255)),
+            ],
+        });
+        // Right half: linear gradient green→yellow
+        list.push(DrawCommand::LinearGradient {
+            rect: Rect::new(64.0, 0.0, 64.0, 64.0),
+            start: Point::new(64.0, 0.0),
+            end: Point::new(128.0, 0.0),
+            stops: vec![
+                GradientStop::new(0.0, Color(0, 255, 0, 255)),
+                GradientStop::new(1.0, Color(255, 255, 0, 255)),
+            ],
+        });
+        backend.execute(&list).expect("execute");
+        let stats = backend.frame_stats();
+        // Both gradients should produce at least 2 draw calls
+        assert!(
+            stats.draw_calls >= 2,
+            "should have at least 2 draw calls for 2 gradients, got {}",
+            stats.draw_calls
+        );
+
+        // Left side near x=2: gradient starts as red
+        let left_px = backend
+            .read_pixel(2, 32)
+            .expect("read left")
+            .expect("bounds");
+        assert!(left_px.0 > 200, "left should be reddish, got {:?}", left_px);
+        assert!(
+            left_px.2 < 100,
+            "left should not be blue, got {:?}",
+            left_px
+        );
+
+        // Right side near x=66: gradient starts as green
+        let right_px = backend
+            .read_pixel(66, 32)
+            .expect("read right")
+            .expect("bounds");
+        assert!(
+            right_px.1 > 200,
+            "right should be greenish, got {:?}",
+            right_px
+        );
+        assert!(
+            right_px.0 < 100,
+            "right should not be red, got {:?}",
+            right_px
+        );
+    }
+
+    #[test]
+    fn gradient_byte_exact_single() {
+        // A single gradient must produce correct pixel values through the
+        // batched path (offset=0 dynamic offset invariant).
+        let Some(mut backend) = try_backend(64, 64) else {
+            return;
+        };
+        let mut list = DrawList::new();
+        list.push(DrawCommand::LinearGradient {
+            rect: Rect::new(0.0, 0.0, 64.0, 64.0),
+            start: Point::new(0.0, 0.0),
+            end: Point::new(64.0, 0.0),
+            stops: vec![
+                GradientStop::new(0.0, Color(255, 0, 0, 255)),
+                GradientStop::new(1.0, Color(0, 0, 255, 255)),
+            ],
+        });
+        backend.execute(&list).expect("execute");
+        // Left edge ~red
+        let left = backend
+            .read_pixel(1, 32)
+            .expect("read left")
+            .expect("bounds");
+        assert!(
+            left.0 > 200 && left.2 < 100,
+            "left should be reddish: {:?}",
+            left
+        );
+        // Right edge ~blue
+        let right = backend
+            .read_pixel(62, 32)
+            .expect("read right")
+            .expect("bounds");
+        assert!(
+            right.2 > 200 && right.0 < 100,
+            "right should be bluish: {:?}",
+            right
+        );
+        // Mid should have intermediate values (not pure red or pure blue)
+        let mid = backend
+            .read_pixel(32, 32)
+            .expect("read mid")
+            .expect("bounds");
+        assert!(mid.3 > 0, "mid should be visible: {:?}", mid);
+    }
+
+    #[test]
+    fn persistent_buffer_reuse_stable() {
+        // Render two consecutive frames with different primitive counts;
+        // both must be correct (stale tail from frame 1 must not bleed into frame 2).
+        let Some(mut backend) = try_backend(64, 64) else {
+            return;
+        };
+
+        // Frame 1: 10 rects filling left strips
+        let mut list1 = DrawList::new();
+        for i in 0..10u32 {
+            list1.push(DrawCommand::FillRect {
+                rect: Rect::new(i as f32 * 4.0, 0.0, 4.0, 64.0),
+                color: Color(255, 0, 0, 255),
+            });
+        }
+        backend.execute(&list1).expect("frame 1");
+        let px1 = backend
+            .read_pixel(2, 32)
+            .expect("frame 1 pixel")
+            .expect("bounds");
+        assert_eq!(px1.0, 255, "frame 1 should be red: {:?}", px1);
+        assert_eq!(px1.3, 255, "frame 1 should be opaque: {:?}", px1);
+
+        // Frame 2: single blue rect covering the whole canvas
+        let mut list2 = DrawList::new();
+        list2.push(DrawCommand::FillRect {
+            rect: Rect::new(0.0, 0.0, 64.0, 64.0),
+            color: Color(0, 0, 255, 255),
+        });
+        backend.execute(&list2).expect("frame 2");
+        let px2 = backend
+            .read_pixel(32, 32)
+            .expect("frame 2 pixel")
+            .expect("bounds");
+        assert_eq!(px2.2, 255, "frame 2 should be blue: {:?}", px2);
+        // Stale-tail check: no red from the previous frame's extra vertices
+        assert!(
+            px2.0 < 10,
+            "frame 2 stale-tail check: should not see red, got {:?}",
+            px2
+        );
     }
 }

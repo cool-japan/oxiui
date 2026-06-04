@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use oxiui_core::{
     ButtonResponse, CheckboxResponse, Color, DropdownResponse, Key, Modifiers, MouseButton,
-    Palette, Size, SliderResponse, TextInputResponse, UiCtx, UiError, UiEvent, Widget,
+    Palette, Size, SliderResponse, TextInputResponse, TextStyle, UiCtx, UiError, UiEvent, Widget,
     WidgetResponse,
 };
 use oxiui_theme::DesignTokens;
@@ -307,6 +307,50 @@ impl<'a> UiCtx for EguiUiCtx<'a> {
             .map(|p| accept_ids.contains(p))
             .unwrap_or(false);
         self.last_response = None;
+        WidgetResponse::supported()
+    }
+
+    fn label_styled(&mut self, text: &str, style: TextStyle) -> WidgetResponse {
+        let mut rt = egui::RichText::new(text);
+        if let Some(sz) = style.font_size {
+            rt = rt.size(sz);
+        }
+        if style.font_weight >= 600 {
+            rt = rt.strong();
+        }
+        if style.italic {
+            rt = rt.italics();
+        }
+        if style.underline {
+            rt = rt.underline();
+        }
+        if style.strikethrough {
+            rt = rt.strikethrough();
+        }
+        if let Some([r, g, b, a]) = style.color {
+            rt = rt.color(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
+        }
+        let r = self.ui.label(rt);
+        self.last_response = Some(r);
+        WidgetResponse::supported()
+    }
+
+    fn heading_styled(&mut self, text: &str, style: TextStyle) -> WidgetResponse {
+        let mut rt = egui::RichText::new(text).heading();
+        if let Some(sz) = style.font_size {
+            rt = rt.size(sz);
+        }
+        if style.font_weight >= 600 {
+            rt = rt.strong();
+        }
+        if style.italic {
+            rt = rt.italics();
+        }
+        if let Some([r, g, b, a]) = style.color {
+            rt = rt.color(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
+        }
+        let r = self.ui.label(rt);
+        self.last_response = Some(r);
         WidgetResponse::supported()
     }
 }
@@ -1081,5 +1125,189 @@ impl StatefulEguiAdapter {
 impl Default for StatefulEguiAdapter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── oxiui-accessibility bridge ────────────────────────────────────────────────
+
+/// Bridge OxiUI's [`oxiui_accessibility::A11yTree`] with egui's AccessKit integration layer.
+///
+/// egui 0.34 ships with built-in AccessKit support; the platform integration
+/// (eframe/egui-winit with `accesskit` feature) maintains its own AccessKit
+/// adapter internally.  This bridge provides a utility to convert an
+/// [`oxiui_accessibility::A11yTree`] (OxiUI's semantic a11y model) into an
+/// [`accesskit::TreeUpdate`] that can be forwarded into egui's AccessKit
+/// pipeline via the platform adapter.
+///
+/// # Feature gate
+///
+/// This module is only compiled when the `a11y` Cargo feature is enabled:
+/// ```toml
+/// [dependencies]
+/// oxiui-egui = { version = "0.1.1", features = ["a11y"] }
+/// ```
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use oxiui_accessibility::tree::{A11yNode, A11yTree, WidgetRole};
+/// use oxiui_egui::a11y::{oxiui_tree_to_accesskit, A11yEguiBridge};
+/// use accesskit::NodeId;
+///
+/// let root = A11yNode::simple(NodeId(1), WidgetRole::Window, Some("App".into()));
+/// let update = oxiui_tree_to_accesskit(&root);
+/// // Forward `update` to the AccessKit adapter held by your platform integration.
+/// ```
+#[cfg(feature = "a11y")]
+pub mod a11y {
+    use accesskit::TreeUpdate;
+    use oxiui_accessibility::tree::{A11yNode, A11yTree};
+
+    /// Convert an OxiUI [`A11yNode`] tree into an AccessKit [`TreeUpdate`].
+    ///
+    /// This is a thin wrapper around [`A11yTree::build`] that converts the
+    /// OxiUI accessibility tree representation into the `accesskit::TreeUpdate`
+    /// format expected by egui's built-in AccessKit integration.
+    ///
+    /// Pass the returned `TreeUpdate` to the platform adapter (e.g.
+    /// `accesskit_winit::Adapter::update_if_active`) after building your UI.
+    ///
+    /// The function performs a full (non-diff) conversion each call.  For
+    /// incremental updates use [`diff_a11y_trees`] instead.
+    pub fn oxiui_tree_to_accesskit(root: &A11yNode) -> TreeUpdate {
+        A11yTree::build(root)
+    }
+
+    /// Compute a minimal diff [`TreeUpdate`] between two OxiUI a11y tree states.
+    ///
+    /// Produces only the nodes that changed between `previous` (the last
+    /// committed tree state) and `current` (the new tree state).  This avoids
+    /// re-sending the entire tree to the platform accessibility layer every
+    /// frame.
+    ///
+    /// Both arguments should be stored by the caller between frames.  A fresh
+    /// [`A11yTree`] can be built via [`A11yTree::build_and_store`].
+    pub fn diff_a11y_trees(previous: &A11yTree, current: &A11yTree) -> TreeUpdate {
+        A11yTree::diff(previous, current)
+    }
+
+    /// A stateful bridge that retains the previous tree for efficient diffing.
+    ///
+    /// Call [`A11yEguiBridge::update`] each frame with the new root node;
+    /// it returns the minimal `TreeUpdate` to forward to the platform
+    /// AccessKit adapter.
+    pub struct A11yEguiBridge {
+        previous: A11yTree,
+        current: A11yTree,
+        /// `true` on the very first frame (forces a full [`A11yTree::build`]).
+        is_first_frame: bool,
+    }
+
+    impl Default for A11yEguiBridge {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl A11yEguiBridge {
+        /// Create a new bridge with an empty previous state.
+        pub fn new() -> Self {
+            Self {
+                previous: A11yTree::default(),
+                current: A11yTree::default(),
+                is_first_frame: true,
+            }
+        }
+
+        /// Advance the bridge one frame: store `root` as the new tree and
+        /// return the [`TreeUpdate`] to forward to the platform adapter.
+        ///
+        /// On the first frame this returns a full tree update; subsequent
+        /// frames return only changed nodes (diff).
+        pub fn update(&mut self, root: &A11yNode) -> TreeUpdate {
+            let update = self.current.build_and_store(root);
+            if self.is_first_frame {
+                self.is_first_frame = false;
+                // Copy current into previous for future diffs.
+                self.previous = std::mem::take(&mut self.current);
+                self.current = A11yTree::default();
+                // Return the full update on the first frame.
+                update
+            } else {
+                // Build a diff — only send changed nodes.
+                let diff = A11yTree::diff(&self.previous, &self.current);
+                // Rotate current → previous for the next frame.
+                std::mem::swap(&mut self.previous, &mut self.current);
+                self.current = A11yTree::default();
+                diff
+            }
+        }
+
+        /// Update the focused node without rebuilding the tree.
+        ///
+        /// Returns a minimal [`TreeUpdate`] that only carries the new focus.
+        pub fn set_focus(&mut self, id: Option<accesskit::NodeId>) -> TreeUpdate {
+            self.current.set_focus(id);
+            self.current.focus_update()
+        }
+    }
+}
+
+// ── oxiui-table integration helpers ──────────────────────────────────────────
+
+/// Integration helpers bridging `oxiui-table` with the egui adapter.
+///
+/// The `oxiui-table` crate already provides an `EguiTableState` and a
+/// `render_egui` method on `Table<S>`.  This module adds convenience wrappers
+/// that let you drive a sorted+filtered table through an [`EguiUiCtx`] and
+/// collect `TableEvent`s into an application-level result type.
+///
+/// # Feature gate
+///
+/// Only compiled when the `table` Cargo feature is enabled:
+/// ```toml
+/// [dependencies]
+/// oxiui-egui = { version = "0.1.1", features = ["table"] }
+/// ```
+#[cfg(feature = "table")]
+pub mod table_bridge {
+    use egui::Ui;
+    use oxiui_table::{
+        header::HeaderSortState, EguiTableState, RowSource, SelectionModel, Table, TableEvent,
+    };
+
+    /// Render a table inside an existing egui `Ui`, collecting events.
+    ///
+    /// Wraps `Table::render_egui` with automatic sort-state management: after
+    /// rendering the table, any [`TableEvent::SortChanged`] events in
+    /// `render_state.events` are applied to `sort_state` via
+    /// [`HeaderSortState::toggle`] so callers do not need to drive this loop
+    /// manually.
+    ///
+    /// Returns the list of events emitted during this frame.
+    pub fn render_sorted_table<S: RowSource>(
+        table: &mut Table<S>,
+        ui: &mut Ui,
+        sort_state: &mut HeaderSortState,
+        render_state: &mut EguiTableState,
+    ) -> Vec<TableEvent> {
+        table.render_egui(ui, sort_state, render_state);
+        render_state.events.clone()
+    }
+
+    /// Apply a [`SelectionModel`] to the events collected during the last frame.
+    ///
+    /// For each [`TableEvent::RowSelected`] event, the selection model is
+    /// updated accordingly (single or multi select, depending on the model's
+    /// mode).  Returns `true` if any selection changed.
+    pub fn apply_selection_events(events: &[TableEvent], selection: &mut SelectionModel) -> bool {
+        let mut changed = false;
+        for event in events {
+            if let TableEvent::RowSelected(row) = event {
+                selection.click(*row);
+                changed = true;
+            }
+        }
+        changed
     }
 }

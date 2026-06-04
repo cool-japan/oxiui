@@ -11,9 +11,17 @@ keywords = ["gui", "iced", "ui", "cooljapan"]
 categories = ["gui"]
 
 [dependencies]
-oxiui-core  = { workspace = true }
-oxiui-theme = { workspace = true }
-iced        = { workspace = true, features = ["image", "advanced"] }
+oxiui-core          = { workspace = true }
+oxiui-theme         = { workspace = true }
+iced                = { workspace = true, features = ["image", "advanced"] }
+oxiui-accessibility = { workspace = true, optional = true }
+accesskit           = { workspace = true, optional = true }
+
+[dev-dependencies]
+accesskit = { workspace = true }
 
 [features]
 default = []
+# Enable the AccessKit a11y bridge: converts a WidgetSpec tree to an
+# accesskit::TreeUpdate via oxiui-accessibility's infrastructure.
+a11y = ["dep:oxiui-accessibility", "dep:accesskit"]

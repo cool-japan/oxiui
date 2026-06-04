@@ -22,9 +22,13 @@
 //!
 //! # Modules
 //!
-//! * [`tree`]    — [`A11yNode`], [`A11yTree`], [`WidgetRole`]
-//! * [`props`]   — [`A11yNodeProps`], [`CheckedState`], [`LiveSetting`], [`TextCaret`], [`TextSelection`]
-//! * [`builder`] — [`A11yNodeBuilder`] fluent builder
+//! * [`tree`]           — [`A11yNode`], [`A11yTree`], [`WidgetRole`]
+//! * [`props`]          — [`A11yNodeProps`], [`CheckedState`], [`LiveSetting`], [`TextCaret`], [`TextSelection`]
+//! * [`builder`]        — [`A11yNodeBuilder`] fluent builder
+//! * [`widget_bridge`] — bridge between [`oxiui_core::Widget`] and the a11y tree;
+//!   [`widget_to_a11y_node`], [`build_a11y_tree`], [`A11yWidgetNode`]
+//! * [`text_bridge`]    — *(feature `text-bridge`)* bridge between
+//!   [`oxiui_text::TextInput`] / [`oxiui_text::TextArea`] and [`A11yNode`].
 
 pub mod action;
 pub mod builder;
@@ -34,7 +38,10 @@ pub mod nav;
 pub mod pool;
 pub mod props;
 pub mod text_a11y;
+#[cfg(feature = "text-bridge")]
+pub mod text_bridge;
 pub mod tree;
+pub mod widget_bridge;
 
 pub use action::{map_action, A11yAction, ActionDispatcher};
 pub use builder::A11yNodeBuilder;
@@ -49,6 +56,9 @@ pub use props::{
 pub use tree::{
     build_table_a11y, column_header_node, synthesize_text_run_children, table_cell_node,
     table_row_node, A11yNode, A11yTree, WidgetRole,
+};
+pub use widget_bridge::{
+    build_a11y_tree, core_role_to_widget_role, widget_to_a11y_node, A11yWidgetNode, NodeIdAllocator,
 };
 
 // ── OS accessibility preferences ──────────────────────────────────────────────

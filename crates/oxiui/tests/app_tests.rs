@@ -803,3 +803,273 @@ fn test_full_lifecycle_init_frames_close() {
         "content closure should have been called"
     );
 }
+
+// ─── New features: design tokens, typography, renderer, startup clock ─────────
+
+#[test]
+fn with_design_tokens_stores_in_config() {
+    let tokens = oxiui_theme::DesignTokens::default();
+    let app = oxiui::App::new(AppConfig::default()).with_design_tokens(tokens.clone());
+    // design_tokens() should return the stored tokens (same spacing values).
+    let got = app.design_tokens();
+    assert_eq!(got.spacing, tokens.spacing);
+    assert_eq!(got.radius, tokens.radius);
+}
+
+#[test]
+fn with_typography_stores_in_config() {
+    let typo = oxiui_theme::TypographyScale::default();
+    let app = oxiui::App::new(AppConfig::default()).with_typography(typo);
+    let got = app.typography();
+    // Check that the sizes round-trip (not just the same default).
+    assert_eq!(got.display.size, typo.display.size);
+    assert_eq!(got.body.size, typo.body.size);
+}
+
+#[test]
+fn design_tokens_falls_back_to_default_when_unset() {
+    let app = oxiui::App::new(AppConfig::default());
+    let got = app.design_tokens();
+    let def = oxiui_theme::DesignTokens::default();
+    // Unset tokens → defaults.
+    assert_eq!(got.spacing, def.spacing);
+}
+
+#[test]
+fn typography_falls_back_to_default_when_unset() {
+    let app = oxiui::App::new(AppConfig::default());
+    let got = app.typography();
+    let def = oxiui_theme::TypographyScale::default();
+    assert_eq!(got.display.size, def.display.size);
+}
+
+#[test]
+fn startup_clock_is_monotonic() {
+    let t0 = oxiui::App::startup_clock();
+    let t1 = oxiui::App::startup_clock();
+    // t1 must be >= t0 (monotonic clock guarantee).
+    assert!(t1 >= t0);
+}
+
+#[test]
+fn process_rss_bytes_returns_option() {
+    // On any platform this must not panic.
+    let _rss: Option<u64> = oxiui::process_rss_bytes();
+    // On Linux it should be Some; on macOS it's None (no C API).
+    // No platform-specific assert here — just verify the function is callable.
+}
+
+#[cfg(feature = "software")]
+#[test]
+fn soft_renderer_constructs() {
+    let app = oxiui::App::new(AppConfig::default());
+    let _r = app.soft_renderer();
+}
+
+#[cfg(feature = "persist")]
+#[test]
+fn with_persistent_state_headless_no_panic() {
+    use oxicode::{Decode, Encode};
+
+    #[derive(Encode, Decode, Default)]
+    struct Counter {
+        n: u32,
+    }
+
+    let tmp = std::env::temp_dir().join("oxiui_persist_test_state.oxi");
+    // Clean up from any previous run.
+    let _ = std::fs::remove_file(&tmp);
+
+    let app = oxiui::App::new(AppConfig::default()).with_persistent_state(
+        Counter::default(),
+        tmp.clone(),
+        |ui, state| {
+            state.n += 1;
+            ui.label(&format!("n={}", state.n));
+        },
+    );
+    app.run_headless_once().unwrap();
+
+    // Clean up.
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// ─── Multi-window support ─────────────────────────────────────────────────────
+
+#[test]
+fn open_window_returns_non_primary_id() {
+    use oxiui_core::window::{WindowConfig, WindowId};
+    let mut app = oxiui::App::new(AppConfig::new().title("main"));
+    let wid = app.open_window(WindowConfig::new("secondary"));
+    assert_ne!(wid, WindowId::PRIMARY);
+}
+
+#[test]
+fn open_multiple_windows_unique_ids() {
+    use oxiui_core::window::WindowConfig;
+    let mut app = oxiui::App::new(AppConfig::new().title("main"));
+    let id1 = app.open_window(WindowConfig::new("w1").width(400.0).height(300.0));
+    let id2 = app.open_window(WindowConfig::new("w2").width(800.0).height(600.0));
+    assert_ne!(id1, id2);
+    assert_eq!(app.secondary_windows().len(), 2);
+}
+
+#[test]
+fn close_window_removes_from_registry() {
+    use oxiui_core::window::WindowConfig;
+    let mut app = oxiui::App::new(AppConfig::new().title("main"));
+    let wid = app.open_window(WindowConfig::new("panel"));
+    assert_eq!(app.secondary_windows().len(), 1);
+    let removed = app.close_window(wid);
+    assert!(removed.is_some());
+    assert!(app.secondary_windows().is_empty());
+}
+
+#[test]
+fn window_channel_cross_window_messaging() {
+    use oxiui_core::window::{WindowConfig, WindowId};
+    let mut app = oxiui::App::new(AppConfig::new().title("main"));
+    let _wid = app.open_window(WindowConfig::new("child"));
+    let ch = app.window_channel().clone();
+    let target = WindowId(42);
+    ch.send(target, "ping").unwrap();
+    let msgs = ch.drain_messages(target).unwrap();
+    assert_eq!(msgs, vec!["ping"]);
+}
+
+// ─── Dialog API ───────────────────────────────────────────────────────────────
+
+#[test]
+fn message_dialog_returns_dialog_id() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.message_dialog("Info", "Hello");
+    // No response yet.
+    assert!(app.poll_dialog(id).is_none());
+    // Post a simulated response.
+    app.respond_dialog(id, DialogResponse::Dismissed);
+    assert_eq!(app.poll_dialog(id), Some(DialogResponse::Dismissed));
+}
+
+#[test]
+fn confirm_dialog_confirmed_response() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.confirm_dialog("Quit?", "Are you sure?");
+    app.respond_dialog(id, DialogResponse::Confirmed);
+    assert_eq!(app.poll_dialog(id), Some(DialogResponse::Confirmed));
+}
+
+#[test]
+fn file_dialog_paths_response() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.file_dialog("Open File", vec![("Rust".into(), "*.rs".into())], false);
+    app.respond_dialog(id, DialogResponse::FilePaths(vec!["/tmp/foo.rs".into()]));
+    if let Some(DialogResponse::FilePaths(paths)) = app.poll_dialog(id) {
+        assert_eq!(paths, vec!["/tmp/foo.rs"]);
+    } else {
+        panic!("expected FilePaths response");
+    }
+}
+
+#[test]
+fn prompt_dialog_text_response() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.prompt_dialog("Name", "Enter name:", Some("World".into()));
+    app.respond_dialog(id, DialogResponse::Text("Alice".into()));
+    assert_eq!(
+        app.poll_dialog(id),
+        Some(DialogResponse::Text("Alice".into()))
+    );
+}
+
+#[test]
+fn file_save_dialog_returns_save_path() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.file_save_dialog("Save As", Some("output.txt".into()), vec![]);
+    app.respond_dialog(id, DialogResponse::SavePath("/tmp/output.txt".into()));
+    assert_eq!(
+        app.poll_dialog(id),
+        Some(DialogResponse::SavePath("/tmp/output.txt".into()))
+    );
+}
+
+#[test]
+fn dialog_poll_after_consume_returns_none() {
+    use oxiui::DialogResponse;
+    let mut app = oxiui::App::new(AppConfig::new().title("dlg"));
+    let id = app.message_dialog("t", "m");
+    app.respond_dialog(id, DialogResponse::Dismissed);
+    let _ = app.poll_dialog(id);
+    assert!(app.poll_dialog(id).is_none());
+}
+
+// ─── Native menu bar ──────────────────────────────────────────────────────────
+
+#[test]
+fn menu_bar_registers_menus() {
+    let app = oxiui::App::new(AppConfig::new().title("menu")).menu_bar(|mb| {
+        mb.menu("File", |m| {
+            m.item("Open", Some("Ctrl+O"), || {});
+            m.item("Quit", Some("Ctrl+Q"), || {});
+        });
+        mb.menu("Help", |m| {
+            m.item("About", None, || {});
+        });
+    });
+    let bar = app.get_menu_bar().expect("menu bar registered");
+    assert_eq!(bar.menu_count(), 2);
+    assert_eq!(bar.menus()[0].label(), "File");
+    assert_eq!(bar.menus()[1].label(), "Help");
+}
+
+#[test]
+fn menu_bar_items_count() {
+    let app = oxiui::App::new(AppConfig::new().title("menu")).menu_bar(|mb| {
+        mb.menu("File", |m| {
+            m.item("New", None, || {});
+            m.separator();
+            m.item("Quit", None, || {});
+        });
+    });
+    let bar = app.get_menu_bar().unwrap();
+    assert_eq!(bar.menus()[0].items().len(), 3);
+}
+
+#[test]
+fn with_menu_bar_accepts_pre_built() {
+    use oxiui::MenuBar;
+    let bar = MenuBar::build(|mb| {
+        mb.menu("View", |m| {
+            m.item("Zoom In", None, || {});
+        });
+    });
+    let app = oxiui::App::new(AppConfig::new().title("menu")).with_menu_bar(bar);
+    assert!(app.get_menu_bar().is_some());
+    assert_eq!(app.get_menu_bar().unwrap().menu_count(), 1);
+}
+
+#[test]
+fn no_menu_bar_by_default() {
+    let app = oxiui::App::new(AppConfig::new().title("no-menu"));
+    assert!(app.get_menu_bar().is_none());
+}
+
+#[test]
+fn menu_bar_find_menu_by_label() {
+    let app = oxiui::App::new(AppConfig::new().title("menu")).menu_bar(|mb| {
+        mb.menu("File", |m| {
+            m.item("New", None, || {});
+        });
+        mb.menu("Edit", |m| {
+            m.item("Copy", None, || {});
+        });
+    });
+    let bar = app.get_menu_bar().unwrap();
+    assert!(bar.find_menu("File").is_some());
+    assert!(bar.find_menu("Edit").is_some());
+    assert!(bar.find_menu("Missing").is_none());
+}

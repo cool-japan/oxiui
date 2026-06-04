@@ -95,7 +95,7 @@ Functional egui adapter (~116 SLOC). Implements `MockUiCtx` wrapping `egui::Ui` 
 - [x] Font loading: load test TTF bytes, verify egui font definitions contain "OxiFont" in proportional and monospace families (~30 SLOC) — verified via `test_font_loading_valid_ttf_succeeds`, `test_font_loading_empty_bytes_err`, `test_stateful_adapter_valid_font_loaded_once` (deviation: `Context` has no public `FontDefinitions` getter; success verified via `Result::is_ok()` + panic-free frame)
 - [x] Extended event forwarding: inject `KeyPress`, `Mouse`, `Resize`, verify egui events (~40 SLOC) — verified via `test_key_press_string_event_forwarded`, `test_key_up_event_forwarded`, `test_mouse_click_event_forwarded`, `test_resize_event_updates_viewport`, `test_resize_forward_no_panic`
 - [x] Custom `OxiWidget` test: wrap a dummy `Widget` impl, render in egui, verify `render()` was called (~30 SLOC) — verified via `test_custom_widget_renders`, `test_custom_widget_painter_no_panic`, `test_egui_adapter_headless_frame_cycle`
-- [ ] Snapshot test: render a reference UI through `EguiUiCtx`, compare egui output against baseline (~80 SLOC)
+- [x] Snapshot test: render a reference UI through `EguiUiCtx`, compare egui output against baseline (~80 SLOC) — implemented in `tests/snapshot_tests.rs`; verifies deterministic shape count across two frames for label/heading/button/separator/horizontal-layout/rich-text; also verifies text/mesh presence in reference UI. Pixel-comparison skipped (platform-dependent); structural shape-count comparison used instead.
 
 ## Performance
 - [x] Minimize allocations in `MockUiCtx::button()`: avoid `to_string` when egui accepts `&str` natively — `EguiUiCtx::button()` already forwards `&str` to egui with zero allocation; confirmed by `test_button_no_string_alloc_contract`.
@@ -103,13 +103,13 @@ Functional egui adapter (~116 SLOC). Implements `MockUiCtx` wrapping `egui::Ui` 
 - [x] Font definition caching: only call `ctx.set_fonts()` once at init, not per-frame — `StatefulEguiAdapter::apply` guards behind `fonts_loaded: bool`; `fonts_load_count` tracks attempts.
 
 ## Integration
-- [ ] `oxiui-core` integration: implement expanded `UiCtx` methods (text_input, checkbox, slider, etc.) as they are added to the trait
-- [ ] `oxiui-text` integration: optionally bypass egui's text layout and use `TextPipeline` for shaping, feeding egui custom `TextLayoutJob` results
+- [x] `oxiui-core` integration: `EguiUiCtx` implements all 16 current `UiCtx` methods including `label_styled`/`heading_styled` (now overridden to forward `TextStyle` fields to `egui::RichText`); `text_input`, `checkbox`, `slider`, `dropdown`, `image`, `separator`, `spacer`, `scroll_area`, `tooltip`, `popup`, `modal`, `horizontal`, `vertical`, `grid`, `menu_bar`, `rich_text`, `drag_source`, `drop_target` all delegating to egui widgets. Verified via `tests/styled_text_tests.rs` (13 tests).
+- [ ] `oxiui-text` integration: optionally bypass egui's text layout and use `TextPipeline` for shaping, feeding egui custom `TextLayoutJob` results. **DEFERRED: egui 0.34 does not expose a stable `TextLayoutJob` injection point from outside; full integration requires upstream egui API (custom text shaping callback); `oxiui_text::TextPipeline::from_bytes` is already used for font validation in `load_font_into_egui`.**
 - [x] `oxiui-theme` integration: consume `DesignTokens`, `TypographyScale`, `ShadowSpec` for full egui style mapping (not just `Visuals`)
-- [ ] `oxiui-table` integration: `Table::render_egui()` already works; ensure expanded table features (sorting, selection) integrate with egui state
-- [ ] `oxiui-accessibility` integration: egui has built-in AccessKit support; bridge OxiUI's `A11yTree` with egui's a11y layer to avoid duplicate trees
-- [ ] `oxiui-web` integration: eframe's wasm backend uses this adapter; ensure all widget forwarding works in browser context
-- [ ] COOLJAPAN ecosystem: no additional C/C++ dependencies beyond what egui/eframe bring (egui is Pure Rust; eframe's wgpu uses OS-provided GPU drivers only)
+- [x] `oxiui-table` integration: `Table::render_egui()` already works; expanded table features (sorting, selection) verified via `tests/table_integration_tests.rs` (12 tests covering `HeaderSortState::toggle`, `SelectionModel` single/multi/clear, `EguiTableState` edit/expand, multi-frame stability). Bridge helpers added to `src/lib.rs` under `table_bridge` feature module.
+- [x] `oxiui-accessibility` integration: egui has built-in AccessKit support; `oxiui_egui::a11y` module bridges `A11yTree`→`TreeUpdate` via `oxiui_tree_to_accesskit`, `diff_a11y_trees`, and stateful `A11yEguiBridge`. Verified via `tests/a11y_integration_tests.rs` (15 tests). Feature-gated behind `a11y` Cargo feature.
+- [ ] `oxiui-web` integration: eframe's wasm backend uses this adapter; ensure all widget forwarding works in browser context. **BLOCKED: requires wasm32 target + browser environment; all widget forwarding code is pure-Rust and should work on wasm32 in theory, but headless test verification requires a WASM runtime not available in this environment.**
+- [x] COOLJAPAN ecosystem: policy validated — oxiui-egui has zero C/C++ dependencies; egui is Pure Rust; eframe's wgpu backend uses OS-provided GPU drivers loaded at runtime (not linked at compile time). Default features are 100% Pure Rust. All new dependencies (oxiui-table, oxiui-accessibility, accesskit) are Pure Rust.
 
 ## Proposed follow-ups
 - **Multi-font-family support:** FontSpec→FontFamily mapping table; current loader only does Proportional+Monospace.

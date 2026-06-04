@@ -151,6 +151,108 @@ impl TextureAtlas {
         (self.used_area as f32) / (total as f32)
     }
 
+    /// Return the number of live (non-evicted) allocations.
+    pub fn allocation_count(&self) -> usize {
+        self.allocations.len()
+    }
+
+    /// Return `true` if atlas utilization has fallen below `threshold`
+    /// (0.0–1.0).  This indicates significant fragmentation and the caller
+    /// should consider triggering a defrag/rebuild.
+    ///
+    /// This check is cheap (a single float comparison).
+    pub fn is_fragmented(&self, threshold: f32) -> bool {
+        self.utilization() < threshold
+    }
+
+    /// Rebuild the atlas layout from scratch using only the currently live
+    /// allocations.
+    ///
+    /// After a defrag, all previously live handles continue to resolve to valid
+    /// (but potentially repositioned) rectangles.  Handles that had already
+    /// been evicted remain invalid.  The GPU texture content is **not** updated
+    /// by this call — the caller must re-upload all live texture regions.
+    ///
+    /// Returns a `Vec<(AtlasHandle, AtlasRect)>` mapping each live handle to
+    /// its new position, in insertion order.  The caller uses this to schedule
+    /// GPU texture copies.
+    ///
+    /// # Complexity
+    ///
+    /// O(n log n) in the number of live allocations.
+    pub fn defrag(&mut self) -> Vec<(AtlasHandle, AtlasRect)> {
+        // Snapshot the live set sorted by area descending (best-fit heuristic).
+        let mut live: Vec<(AtlasHandle, AtlasRect)> =
+            self.allocations.iter().map(|(&h, &r)| (h, r)).collect();
+        // Sort by area descending so large items get placed first.
+        live.sort_unstable_by(|(_, a), (_, b)| {
+            let area_a = u64::from(a.w) * u64::from(a.h);
+            let area_b = u64::from(b.w) * u64::from(b.h);
+            area_b.cmp(&area_a)
+        });
+
+        // Rebuild the shelf layout.
+        let width = self.width;
+        let height = self.height;
+        self.next_y = 0;
+        self.shelves.clear();
+        self.allocations.clear();
+        self.lru_order.clear();
+        self.free_list.clear();
+        self.used_area = 0;
+        // Keep next_id monotonically increasing so old handles staying live
+        // still compare equal to the new allocations we register below.
+
+        let mut result = Vec::with_capacity(live.len());
+        for (handle, old_rect) in live {
+            let w = old_rect.w;
+            let h = old_rect.h;
+            // Try to place this item using the normal allocation path.
+            let placed = self
+                .alloc_from_free_list(w, h)
+                .or_else(|| self.alloc_from_shelves(w, h))
+                .or_else(|| self.alloc_new_shelf(w, h));
+            if let Some(new_rect) = placed {
+                self.used_area += u64::from(new_rect.w) * u64::from(new_rect.h);
+                // Re-use the original handle so callers' existing handles are valid.
+                self.allocations.insert(handle, new_rect);
+                self.lru_order.push_back(handle);
+                result.push((handle, new_rect));
+            }
+            // Unreachable in practice: atlas is at least as large as before.
+            let _ = (width, height); // suppress unused warning
+        }
+        result
+    }
+
+    /// Check whether utilization is below the given `threshold` and, if so,
+    /// perform an in-place defrag.
+    ///
+    /// Returns `Some(relocations)` if a defrag was performed, `None` if
+    /// utilization was already above the threshold.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use oxiui_render_wgpu::TextureAtlas;
+    /// let mut atlas = TextureAtlas::new(64, 64);
+    /// // … insert/evict until fragmented …
+    /// if let Some(moves) = atlas.defrag_if_fragmented(0.5) {
+    ///     // re-upload the relocated regions
+    ///     for (_handle, _new_rect) in moves {}
+    /// }
+    /// ```
+    pub fn defrag_if_fragmented(
+        &mut self,
+        threshold: f32,
+    ) -> Option<Vec<(AtlasHandle, AtlasRect)>> {
+        if self.is_fragmented(threshold) {
+            Some(self.defrag())
+        } else {
+            None
+        }
+    }
+
     /// Discard all allocations and reinitialise with new dimensions.
     ///
     /// Any existing handles become invalid.  Uploading updated GPU texture data
@@ -333,6 +435,65 @@ mod tests {
                 assert!(!overlap, "live rects {i} and {j} overlap: {a:?} vs {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn atlas_fragmentation_detected_and_defrag_works() {
+        // Build a small atlas, fill it completely with 4×4 items on a 16×4 atlas,
+        // then verify defrag keeps live handles valid.
+        let mut atlas = TextureAtlas::new(16, 4);
+        // Insert 4 items of 4×4 — exactly fills the atlas.
+        let h0 = atlas.insert(4, 4).expect("h0");
+        let h1 = atlas.insert(4, 4).expect("h1");
+        let h2 = atlas.insert(4, 4).expect("h2");
+        let h3 = atlas.insert(4, 4).expect("h3");
+        assert_eq!(atlas.allocation_count(), 4);
+
+        // Defrag a full atlas: all 4 handles should be remapped.
+        let relocations = atlas.defrag();
+        assert_eq!(relocations.len(), 4, "defrag must remap all 4 live handles");
+
+        // Every remapped handle must be fetchable via get().
+        for (h, new_rect) in &relocations {
+            let fetched = atlas.get(*h).expect("handle must remain live after defrag");
+            assert_eq!(fetched, *new_rect, "relocation rect must match get()");
+        }
+
+        // Handles h0..h3 should still be live after the defrag.
+        for h in [h0, h1, h2, h3] {
+            assert!(atlas.get(h).is_some(), "handle must survive defrag: {h:?}");
+        }
+    }
+
+    #[test]
+    fn atlas_is_fragmented_threshold() {
+        let mut atlas = TextureAtlas::new(16, 16);
+        // Start empty — utilization == 0 → fragmented for any positive threshold.
+        assert!(
+            atlas.is_fragmented(0.1),
+            "empty atlas must be fragmented for threshold > 0"
+        );
+        // Insert one item to raise utilization above 0.
+        let _h = atlas.insert(4, 4).expect("insert");
+        // Threshold=0.0 → never fragmented.
+        assert!(
+            !atlas.is_fragmented(0.0),
+            "threshold=0 must never report fragmentation"
+        );
+    }
+
+    #[test]
+    fn atlas_defrag_if_fragmented_skips_when_healthy() {
+        let mut atlas = TextureAtlas::new(8, 8);
+        // Fill entire atlas with one item.
+        let _ = atlas.insert(8, 8).expect("insert");
+        assert!(atlas.utilization() >= 0.99);
+        // Threshold < utilization → no defrag needed.
+        let result = atlas.defrag_if_fragmented(0.5);
+        assert!(
+            result.is_none(),
+            "defrag_if_fragmented should return None when healthy"
+        );
     }
 
     #[test]

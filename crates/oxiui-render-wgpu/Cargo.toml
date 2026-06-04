@@ -12,9 +12,32 @@ keywords = ["wgpu", "gpu", "oxiui", "cooljapan", "pure-rust"]
 
 [features]
 default = []
+## Enable `oxiui-theme` bridge: convert `ShadowSpec` / `DesignTokens` /
+## `ExtendedPalette` into `DrawCommand` and `GradientStop` values.
+theme = ["dep:oxiui-theme"]
+## Enable `oxiui-accessibility` bridge: focus ring rendering and high-contrast
+## mode helpers that consume `FocusRing` / `OsA11yPrefs` from `oxiui-accessibility`.
+accessibility = ["dep:oxiui-accessibility"]
+## Enable SDF text rendering: GPU glyph atlas upload and text fragment shader,
+## bridging `oxiui-text` `GlyphAtlas` / `TextPipeline` to the wgpu backend.
+## Also enables the new `SdfTextPipeline` with a dedicated WGSL SDF shader.
+text = ["dep:oxiui-text", "dep:oxitext-sdf"]
 
 [dependencies]
 oxiui-core.workspace = true
+oxiui-theme = { workspace = true, optional = true }
+oxiui-accessibility = { workspace = true, optional = true }
+oxiui-text = { workspace = true, optional = true }
+oxitext-sdf = { workspace = true, optional = true }
 wgpu.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true
+raw-window-handle.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "rrect_bench"
+harness = false

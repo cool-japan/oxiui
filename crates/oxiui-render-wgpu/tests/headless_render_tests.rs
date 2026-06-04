@@ -292,11 +292,261 @@ fn capabilities_reflect_implemented_features() {
         Some(b) => b,
         None => return,
     };
-    // Deferred features (require texture-atlas / blur pipeline).
+    // Deferred features (require glyph-atlas pipeline).
     assert!(!backend.supports_text());
-    assert!(!backend.supports_images());
-    assert!(!backend.supports_blur());
     // Implemented in this slice.
+    assert!(backend.supports_images());
+    assert!(backend.supports_blur());
     assert!(backend.supports_gradients());
     assert!(backend.supports_paths());
+}
+
+// ── Device initialisation test (TODO L67) ────────────────────────────────────
+
+#[test]
+fn device_init_headless_succeeds_or_skips() {
+    // Verify that headless init either succeeds or returns UiError::Unsupported
+    // (not any other error variant). This guards against silent panics on
+    // GPU-less CI hosts.
+    match WgpuBackend::headless(64, 64) {
+        Ok(_) => { /* GPU available — good */ }
+        Err(UiError::Unsupported(_)) => { /* No GPU — acceptable skip */ }
+        Err(e) => panic!("headless() returned unexpected error: {e:?}"),
+    }
+}
+
+// ── Render pipeline compilation tests (TODO L68 + L69) ───────────────────────
+
+#[test]
+fn all_pipelines_compile_without_error() {
+    // Constructing WgpuBackend triggers creation of all 5 pipelines
+    // (SolidPipeline, GradientPipeline, TexturedPipeline, BlurPipeline,
+    //  CompositePipeline) and both quality variants (screen count=N,
+    //  mask count=1). If any WGSL shader fails to compile the wgpu validation
+    //  layer will panic here.
+    let Some(_b) = try_backend(4, 4) else { return };
+    // Reaching this point means all pipelines compiled successfully.
+}
+
+#[test]
+fn balanced_quality_pipelines_compile() {
+    // Build with msaa=4 (balanced preset); validates the count=4 pipeline variant.
+    match WgpuBackend::headless_with_quality(4, 4, &oxiui_render_wgpu::RenderQuality::balanced()) {
+        Ok(_) => { /* pipelines compiled at sample_count=4 (or fell back to 1) */ }
+        Err(UiError::Unsupported(_)) => { /* no GPU — acceptable */ }
+        Err(e) => panic!("headless_with_quality(balanced) failed: {e:?}"),
+    }
+}
+
+// ── Scissor rect intersection tests (TODO L72) ───────────────────────────────
+
+#[test]
+fn scissor_clip_restricts_draw_to_intersection() {
+    let Some(mut b) = try_backend(64, 64) else {
+        return;
+    };
+    let mut list = DrawList::new();
+    // Fill whole canvas blue, then push a clip of the top half, fill green inside.
+    // Bottom half should remain blue; top half green.
+    list.push_rect(Rect::new(0.0, 0.0, 64.0, 64.0), Color(0, 0, 255, 255));
+    list.push_clip(Rect::new(0.0, 0.0, 64.0, 32.0)); // top half
+    list.push_rect(Rect::new(0.0, 0.0, 64.0, 64.0), Color(0, 255, 0, 255));
+    list.pop_clip();
+    b.execute(&list).expect("execute");
+    // Top-half centre should be green
+    let top = b.read_pixel(32, 16).expect("read").expect("pixel");
+    assert_eq!(
+        (top.0, top.1, top.2, top.3),
+        (0, 255, 0, 255),
+        "top half should be green (inside clip)"
+    );
+    // Bottom-half centre should be blue
+    let bot = b.read_pixel(32, 48).expect("read").expect("pixel");
+    assert_eq!(
+        (bot.0, bot.1, bot.2, bot.3),
+        (0, 0, 255, 255),
+        "bottom half should be blue (outside clip)"
+    );
+}
+
+#[test]
+fn nested_scissor_clips_intersect() {
+    let Some(mut b) = try_backend(64, 64) else {
+        return;
+    };
+    let mut list = DrawList::new();
+    // Outer clip: top-left 48×48 quadrant. Inner clip: bottom-right 48×48 quadrant.
+    // Intersection: 32×32 centre square [16,16]→[48,48].
+    list.push_clip(Rect::new(0.0, 0.0, 48.0, 48.0));
+    list.push_clip(Rect::new(16.0, 16.0, 48.0, 48.0));
+    list.push_rect(Rect::new(0.0, 0.0, 64.0, 64.0), Color(255, 0, 0, 255));
+    list.pop_clip();
+    list.pop_clip();
+    b.execute(&list).expect("execute");
+    // Pixel inside intersection → red
+    let inside = b.read_pixel(32, 32).expect("read").expect("pixel");
+    assert_eq!(inside.3, 255, "pixel in intersection must be opaque (red)");
+    // Pixel outside intersection (top-left corner) → transparent
+    let outside = b.read_pixel(5, 5).expect("read").expect("pixel");
+    assert_eq!(
+        outside.3, 0,
+        "pixel outside intersection must be transparent"
+    );
+}
+
+// ── Draw-batching coalescing test (TODO L71) ─────────────────────────────────
+
+#[test]
+fn many_solid_rects_coalesce_into_few_draws() {
+    // 100 FillRect commands (10×10 non-overlapping 20×20 rects) with no clip
+    // changes should all be merged into a single solid draw call (one
+    // vertex-buffer range).  We verify:
+    //   (a) all rects render correctly (sampling a red column and a blue column),
+    //   (b) the operation completes without OOM / timeout (i.e. isn't O(n) GPU
+    //       submissions),
+    //   (c) the draw-call count is small (coalescing is working).
+    let Some(mut b) = try_backend(256, 256) else {
+        return;
+    };
+    let mut list = DrawList::new();
+    // Lay out 10×10 = 100 non-overlapping 20×20 rects, tiled across 256×256.
+    // Alternate red/blue columns so we can sample both colours.
+    for row in 0u32..10 {
+        for col in 0u32..10 {
+            let x = col as f32 * 25.0 + 2.0;
+            let y = row as f32 * 25.0 + 2.0;
+            let color = if col % 2 == 0 {
+                Color(255, 0, 0, 255)
+            } else {
+                Color(0, 0, 255, 255)
+            };
+            list.push_rect(Rect::new(x, y, 20.0, 20.0), color);
+        }
+    }
+    b.execute(&list).expect("execute");
+    // Sample a red rect centre (col=0, row=0): pixel at (12, 12).
+    let red_px = b.read_pixel(12, 12).expect("read red").expect("pixel");
+    assert_eq!(
+        (red_px.0, red_px.1, red_px.2),
+        (255, 0, 0),
+        "col=0 (red column) centre should be red"
+    );
+    // Sample a blue rect centre (col=1, row=0): pixel at (37, 12).
+    let blue_px = b.read_pixel(37, 12).expect("read blue").expect("pixel");
+    assert_eq!(
+        (blue_px.0, blue_px.1, blue_px.2),
+        (0, 0, 255),
+        "col=1 (blue column) centre should be blue"
+    );
+    // After executing, verify draw counts: 100 unclipped same-kind rects with
+    // no scissor changes should coalesce into ≤3 draws (typically just 1).
+    let stats = b.frame_stats();
+    assert!(
+        stats.draw_calls <= 3,
+        "100 unclipped same-kind rects should coalesce into ≤3 draws, got {}",
+        stats.draw_calls
+    );
+}
+
+// ── Multi-size backends independence test (TODO L74) ─────────────────────────
+
+#[test]
+fn different_size_backends_work_independently() {
+    // Proxy for resize: two independent backends at different sizes both work
+    // correctly.  Verifies that each backend's offscreen texture is correctly
+    // sized and that they do not share any GPU state.
+    let Some(mut b_small) = try_backend(32, 32) else {
+        return;
+    };
+    let Some(mut b_large) = try_backend(128, 128) else {
+        return;
+    };
+    let mut list = DrawList::new();
+    list.push_rect(Rect::new(0.0, 0.0, 100.0, 100.0), Color(0, 255, 0, 255));
+    b_small.execute(&list).expect("small execute");
+    b_large.execute(&list).expect("large execute");
+    // Small backend: pixel within its 32×32 viewport should be green.
+    let s = b_small
+        .read_pixel(16, 16)
+        .expect("read small")
+        .expect("pixel");
+    assert_eq!(
+        (s.0, s.1, s.2, s.3),
+        (0, 255, 0, 255),
+        "small backend centre should be green"
+    );
+    // Large backend: same green fill visible well inside 128×128.
+    let l = b_large
+        .read_pixel(50, 50)
+        .expect("read large")
+        .expect("pixel");
+    assert_eq!(
+        (l.0, l.1, l.2, l.3),
+        (0, 255, 0, 255),
+        "large backend centre should be green"
+    );
+}
+
+// ── Resize handling tests ─────────────────────────────────────────────────────
+
+/// Verify that `WgpuBackend::resize` works without panic and the new surface
+/// reports the correct dimensions.
+#[test]
+fn resize_updates_surface_dimensions() {
+    let Some(mut b) = try_backend(32, 32) else {
+        return;
+    };
+    b.resize(128, 64).expect("resize must succeed");
+    assert_eq!(b.width(), 128, "width must be updated after resize");
+    assert_eq!(b.height(), 64, "height must be updated after resize");
+    let sz = b.surface_size();
+    assert!(
+        (sz.width - 128.0).abs() < f32::EPSILON,
+        "surface_size width must be 128 after resize"
+    );
+    assert!(
+        (sz.height - 64.0).abs() < f32::EPSILON,
+        "surface_size height must be 64 after resize"
+    );
+}
+
+/// Verify that rendering after a resize produces correct pixels.
+#[test]
+fn resize_then_render_produces_correct_pixels() {
+    let Some(mut b) = try_backend(32, 32) else {
+        return;
+    };
+    // Resize to 64×64.
+    b.resize(64, 64).expect("resize");
+
+    // Render a red rect covering the entire 64×64 canvas.
+    let mut list = DrawList::new();
+    list.push_rect(Rect::new(0.0, 0.0, 64.0, 64.0), Color(255, 0, 0, 255));
+    b.execute(&list).expect("execute after resize");
+
+    // Sample a pixel from the centre.
+    let px = b.read_pixel(32, 32).expect("read").expect("pixel");
+    assert_eq!(
+        (px.0, px.1, px.2, px.3),
+        (255, 0, 0, 255),
+        "pixel at (32,32) must be red after resize+render"
+    );
+}
+
+/// Resize to zero dimensions must return an error, not panic.
+#[test]
+fn resize_zero_dimension_returns_error() {
+    let Some(mut b) = try_backend(32, 32) else {
+        return;
+    };
+    assert!(
+        b.resize(0, 32).is_err(),
+        "resize(0, 32) must return an error"
+    );
+    assert!(
+        b.resize(32, 0).is_err(),
+        "resize(32, 0) must return an error"
+    );
+    // Backend must still be usable at the original dimensions.
+    assert_eq!(b.width(), 32, "width must be unchanged after failed resize");
 }

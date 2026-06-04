@@ -64,7 +64,7 @@ Seed-stage core traits crate (~195 SLOC). Defines `UiCtx`, `Widget`, `Theme`, `L
 - [x] Clipboard abstraction: `ClipboardProvider` trait with `get_text()`/`set_text()` + default MIME methods (`widget_ext.rs`).
 - [x] Drag-and-drop protocol: `DragSource`/`DropTarget` traits, `DragData` payload, `DropEffect` (None/Copy/Move/Link) (`widget_ext.rs`). NOTE: visual drag preview is a render-backend concern, not core.
 - [x] Cursor management: `CursorShape` enum (pointer/text/resize{Ew,Ns,Nesw,Nwse}/grab/grabbing/crosshair/wait/progress/move/notallowed/none) (`style.rs`). Custom cursor images are a backend concern.
-- [ ] Multi-window support: `WindowId` handle, window creation/destruction events, cross-window communication, per-window widget trees (~200 SLOC) — deferred (architecture; see follow-ups)
+- [x] Multi-window support: `WindowId` handle, `WindowManager` per-window widget trees, `WindowChannel` cross-window message passing, `WindowConfig` builder, `WindowEvent` lifecycle events — 15 tests in `window.rs` (done 2026-06-03)
 
 ## API Improvements
 - [x] Color-space conversions: `LinearRgba`/`Hsla`/`Oklcha` with round-trip-correct sRGB↔linear↔HSL↔Oklch math + `LinearRgba::lerp`/`relative_luminance` (`color_space.rs`). NOTE: base `Color` stays 8-bit sRGB (additive — not made generic, to avoid breaking adapters); the spaces are conversion views.
@@ -156,20 +156,20 @@ before implementation.
 - **oxiui-web self-contained items:** Handle return, MountOptions, typed errors, async mount, native-stub test — deferred until core event loop is wired.
 
 ## Performance
-- [ ] Layout cache hit-rate benchmarks: measure cache effectiveness on realistic widget trees (100/1000/10000 nodes)
-- [ ] Event dispatch allocation-free fast path: pre-allocate handler vectors, avoid per-event heap allocation
-- [ ] Widget tree arena allocation: use a typed arena (e.g. `bumpalo` or custom) for widget nodes to improve cache locality
-- [ ] Parallel layout computation: independent subtrees can be laid out concurrently via rayon work-stealing
-- [ ] Benchmark flexbox layout against reference (Yoga/Taffy) on identical inputs
+- [x] Layout cache hit-rate benchmarks: measure cache effectiveness on realistic widget trees — `benches/layout_cache.rs` using criterion (insert+hit, warm-hits, mixed-invalidation) (done 2026-06-03)
+- [x] Event dispatch allocation-free fast path: pre-allocate `path_scratch` + `pending_scratch` vecs as fields on `EventDispatcher`; reused across dispatches via `mem::take` + restore; `benches/event_dispatch.rs` benchmarks the path cost (done 2026-06-03)
+- [x] Widget tree arena allocation: `WidgetTree` now carries a `HashMap<WidgetId, usize>` index alongside the arena Vec — `get`/`get_mut`/`index_of` are O(1); `insert` maintains the index; `remove` rebuilds it in a single O(n) retain+enumerate pass (done 2026-06-03)
+- [x] Parallel layout computation: `layout_subtrees_parallel(&[LayoutTask]) -> Vec<Vec<Rect>>` using Rayon `par_iter` dispatches independent container layouts onto the work-stealing pool; exported from crate root; 4 tests added (done 2026-06-03)
+- [x] Benchmark flexbox layout: `benches/flexbox_layout.rs` benchmarks the real `FlexLayout` engine at 10 / 100 items + the parallel batch path (done 2026-06-03)
 
 ## Integration
 - [x] `oxiui-text` integration: `UiCtx::label()`/`heading()` should accept `TextStyle` for rich formatting via oxitext pipeline
-- [ ] `oxiui-theme` integration: `Theme` trait should supply `Padding`/`Border`/`Spacing` design tokens, not just `Palette`+`FontSpec`
-- [ ] `oxiui-accessibility` integration: automatic a11y node generation from widget tree (every widget gets an `A11yNode`)
+- [x] `oxiui-theme` integration: `Theme` trait now supplies `spacing_tokens() -> SpacingTokens`, `border_tokens() -> BorderTokens`, `padding_tokens() -> PaddingTokens` as default methods; `SpacingTokens`/`BorderTokens`/`PaddingTokens` structs added to `lib.rs`; existing `CooljapanTheme` and all adapters compile unchanged (done 2026-06-03). 4 tests: `theme_default_spacing_tokens`, `theme_default_border_tokens`, `theme_default_padding_tokens`, `theme_custom_spacing_overrides_default`.
+- [x] `oxiui-accessibility` integration: `Widget` trait gains `a11y_role() -> A11yRole`, `a11y_label() -> Option<String>`, `a11y_description() -> Option<String>` default methods; `A11yRole` enum (27 variants) added to lib.rs (done 2026-06-03)
 - [x] `oxiui-render-*` integration: define `RenderBackend` trait that render crates implement, replacing the current `UiCtx`-as-renderer conflation
     - **Goal:** core gains a backend-neutral, replayable paint command buffer + a backend trait, so CPU (now) and GPU (later) renderers consume one format. Purely additive — `UiCtx` immediate-mode path untouched.
     - **Design:** new module `src/paint.rs` — `DrawCommand` enum (`#[non_exhaustive]`, owned), `PathData`/`PathVerb`/canonical enums (`FillRule`, `LineJoin`, `LineCap`, `StrokeStyle`, `GradientStop`, `ImageFilter`, `ImageData`), `DrawList` with typed push_* builders + bounds union + clip-depth balance, `RenderBackend` trait (`execute(&DrawList)->Result<()>`, `surface_size`, capability probes with default false). Reuse existing `UiError` variants; no new variant.
     - **Files:** new `src/paint.rs`; `lib.rs` adds `pub mod paint` + re-export `DrawCommand/DrawList/RenderBackend` at crate root.
     - **Tests:** `draw_list_builder_records_command_sequence`, `draw_list_len_and_is_empty`, `clip_push_pop_balance`, `bounds_union_of_draw_commands`, `bounds_excludes_clip_commands`, `clear_resets_bounds_and_depth`, `path_data_builder_and_bounds`, `empty_list_iter_is_empty`.
     - **Risk:** keystone — Stage 2 render-soft depends on this surface. Additive; `UiCtx` untouched.
-- [ ] COOLJAPAN ecosystem: layout constraint solver must be Pure Rust (no OxiZ dependency for layout); serialization of widget state via oxicode (not bincode)
+- [x] COOLJAPAN ecosystem: layout constraint solver is Pure Rust (`solver.rs` — no OxiZ dep); widget state serialization uses `oxicode` via `#[derive(oxicode::Encode, oxicode::Decode)]` on `Color`, `Palette`, `FontSpec`, `FontStyle`, `FontFeature` — no bincode anywhere in the crate (verified 2026-06-03)

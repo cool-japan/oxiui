@@ -31,5 +31,4 @@ workspace = true
 optional = true
 
 [dev-dependencies]
-# temporarily removed for publish (circular/forward dev-dep); restore after publish complete
-# oxiui-theme = { workspace = true }
+oxiui-theme = { path = "../oxiui-theme" }

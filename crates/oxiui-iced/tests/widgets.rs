@@ -353,3 +353,94 @@ fn test_text_input_focused_is_false_in_headless() {
     );
     assert!(resp.supported, "text_input must be supported");
 }
+
+// ── text_area (oxiui-core integration: text_area method) ─────────────────────
+
+#[test]
+fn text_area_returns_supported_response() {
+    let mut ctx = default_ctx();
+    let resp = ctx.text_area("hello\nworld", 3);
+    assert!(resp.supported, "IcedUiCtx::text_area must be supported");
+    assert_eq!(resp.text, "hello\nworld");
+    assert!(!resp.changed, "seed text unchanged");
+}
+
+#[test]
+fn text_area_reflects_prior_state() {
+    let mut state = HashMap::new();
+    state.insert(0usize, WidgetState::TextArea("stored\ntext".to_owned()));
+    let mut ctx = ctx_with_state(state);
+    let resp = ctx.text_area("ignored_seed", 2);
+    assert_eq!(resp.text, "stored\ntext", "should reflect stored state");
+    assert!(resp.changed, "stored value differs from seed");
+}
+
+#[test]
+fn text_area_cursor_pos_approximated() {
+    let mut ctx = default_ctx();
+    let resp = ctx.text_area("line1\nline2\nline3", 3);
+    // cursor_pos should be (last_line_idx, last_line_len) — (2, 5).
+    assert_eq!(resp.cursor_pos.0, 2, "row = line count - 1");
+    assert_eq!(resp.cursor_pos.1, 5, "col = len of last line");
+}
+
+#[test]
+fn text_area_apply_message_text_area_changed_updates_state() {
+    let mut state = HashMap::new();
+    let mut clicks = std::collections::HashSet::new();
+    apply_message(
+        &mut state,
+        &mut clicks,
+        &Message::TextAreaChanged(0, "new content".to_owned()),
+    );
+    match state.get(&0) {
+        Some(WidgetState::TextArea(s)) => assert_eq!(s, "new content"),
+        other => panic!("unexpected state: {other:?}"),
+    }
+}
+
+#[test]
+fn text_area_state_persists_across_frames() {
+    let mut config = IcedConfig::default();
+    let mut ctx = IcedUiCtx::new(config.clone());
+    let _resp = ctx.text_area("initial\ncontent", 3);
+    // Simulate TextAreaChanged updating state.
+    apply_message(
+        &mut config.state,
+        &mut config.pending_clicks,
+        &Message::TextAreaChanged(0, "updated\ncontent".to_owned()),
+    );
+    // Frame 2: state should carry through.
+    let mut ctx2 = IcedUiCtx::new(config.clone());
+    let resp2 = ctx2.text_area("initial\ncontent", 3);
+    assert_eq!(resp2.text, "updated\ncontent", "state must persist");
+    assert!(resp2.changed, "stored differs from seed → changed");
+}
+
+#[test]
+fn text_area_materialises_without_panic() {
+    let mut ctx = default_ctx();
+    ctx.text_area("line1\nline2\nline3", 3);
+    // Materialisation of text_area must not panic.
+    let _ = ctx.into_iced_element();
+}
+
+#[test]
+fn null_ctx_text_area_is_recorded() {
+    let mut ctx = IcedNullCtx::recording();
+    ctx.text_area("content", 2);
+    let log = ctx.log.expect("recording should be Some");
+    let found = log.iter().any(|(m, _)| *m == "text_area");
+    assert!(found, "text_area call should be logged");
+}
+
+#[test]
+fn text_area_assigns_next_id_after_prior_widgets() {
+    let mut ctx = default_ctx();
+    // First widget gets id=0 (text_input), second gets id=1 (text_area).
+    let _ti = ctx.text_input("seed");
+    let resp = ctx.text_area("ta_seed", 2);
+    // The text_area is not changed vs its own seed text.
+    assert!(!resp.changed, "text_area seed equals stored = not changed");
+    assert!(resp.supported);
+}

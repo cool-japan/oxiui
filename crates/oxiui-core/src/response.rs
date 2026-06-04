@@ -12,6 +12,70 @@
 //! payload alongside the flag, and an [`unsupported`](CheckboxResponse::unsupported)
 //! constructor the defaults use.
 
+/// Result of a [`text_area`](crate::UiCtx::text_area) widget.
+///
+/// Mirrors [`TextInputResponse`] but adds a `cursor_pos` field that reports the
+/// line/column of the caret inside the multi-line buffer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextAreaResponse {
+    /// Whether the text changed this frame.
+    pub changed: bool,
+    /// The current full text contents (lines separated by `'\n'`).
+    pub text: String,
+    /// Whether the active adapter actually rendered this widget.
+    pub supported: bool,
+    /// Whether this text area currently has keyboard focus.
+    pub focused: bool,
+    /// `(line, column)` zero-based caret position within the buffer.
+    pub cursor_pos: (usize, usize),
+}
+
+impl TextAreaResponse {
+    /// The "not implemented by this adapter" response: empty text, not changed,
+    /// `supported = false`.
+    pub fn unsupported() -> Self {
+        Self {
+            changed: false,
+            text: String::new(),
+            supported: false,
+            focused: false,
+            cursor_pos: (0, 0),
+        }
+    }
+
+    /// A supported response carrying the current `text`, `changed` flag, and
+    /// caret position.
+    ///
+    /// `focused` defaults to `false`. Use
+    /// [`TextAreaResponse::supported_focused`] if accurate focus state is
+    /// available.
+    pub fn supported(text: impl Into<String>, changed: bool, cursor_pos: (usize, usize)) -> Self {
+        Self {
+            changed,
+            text: text.into(),
+            supported: true,
+            focused: false,
+            cursor_pos,
+        }
+    }
+
+    /// A supported response with an explicit `focused` state.
+    pub fn supported_focused(
+        text: impl Into<String>,
+        changed: bool,
+        cursor_pos: (usize, usize),
+        focused: bool,
+    ) -> Self {
+        Self {
+            changed,
+            text: text.into(),
+            supported: true,
+            focused,
+            cursor_pos,
+        }
+    }
+}
+
 /// Result of a [`text_input`](crate::UiCtx::text_input) widget.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextInputResponse {
@@ -190,6 +254,7 @@ mod tests {
     #[test]
     fn unsupported_constructors_set_flag_false() {
         assert!(!TextInputResponse::unsupported().supported);
+        assert!(!TextAreaResponse::unsupported().supported);
         assert!(!CheckboxResponse::unsupported().supported);
         assert!(!SliderResponse::unsupported().supported);
         assert!(!DropdownResponse::unsupported().supported);
@@ -200,6 +265,10 @@ mod tests {
     fn unsupported_payloads_are_zeroed() {
         assert_eq!(TextInputResponse::unsupported().text, "");
         assert!(!TextInputResponse::unsupported().changed);
+        let ta = TextAreaResponse::unsupported();
+        assert_eq!(ta.text, "");
+        assert!(!ta.changed);
+        assert_eq!(ta.cursor_pos, (0, 0));
         assert!(!CheckboxResponse::unsupported().checked);
         assert_eq!(SliderResponse::unsupported().value, 0.0);
         assert_eq!(DropdownResponse::unsupported().selected, 0);
@@ -209,6 +278,12 @@ mod tests {
     fn supported_constructors_carry_payload() {
         let t = TextInputResponse::supported("hi", true);
         assert!(t.supported && t.changed && t.text == "hi");
+        let ta = TextAreaResponse::supported("hello\nworld", true, (1, 3));
+        assert!(ta.supported && ta.changed);
+        assert_eq!(ta.text, "hello\nworld");
+        assert_eq!(ta.cursor_pos, (1, 3));
+        let taf = TextAreaResponse::supported_focused("txt", false, (0, 1), true);
+        assert!(taf.supported && taf.focused);
         let c = CheckboxResponse::supported(true, true);
         assert!(c.supported && c.checked && c.changed);
         let s = SliderResponse::supported(0.5, false);
@@ -226,5 +301,27 @@ mod tests {
             CheckboxResponse::unsupported().supported
         );
         assert_eq!(WidgetResponse::default(), WidgetResponse::unsupported());
+    }
+
+    // TextAreaResponse-specific tests
+    #[test]
+    fn text_area_response_supported_false_by_default() {
+        let r = TextAreaResponse::default();
+        assert!(!r.supported);
+        assert_eq!(r.cursor_pos, (0, 0));
+    }
+
+    #[test]
+    fn text_area_response_cursor_pos_preserved() {
+        let r = TextAreaResponse::supported("line1\nline2", false, (1, 4));
+        assert_eq!(r.cursor_pos, (1, 4));
+    }
+
+    #[test]
+    fn text_area_response_focused_flag() {
+        let unfocused = TextAreaResponse::supported("x", false, (0, 0));
+        assert!(!unfocused.focused);
+        let focused = TextAreaResponse::supported_focused("x", false, (0, 0), true);
+        assert!(focused.focused);
     }
 }

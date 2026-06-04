@@ -1,6 +1,6 @@
 # OxiUI TODO
 
-**v0.1.0 released 2026-06-01** — M0–M5 complete, 13 crates, 1 257 tests, Pure Rust.
+**v0.1.1 released 2026-06-04** — patch bump; M0–M5 complete, 14 crates, 1 948 tests, Pure Rust.
 
 Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
 
@@ -81,6 +81,48 @@ Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
   - **Tests:** headless — `render_headless_once(800, 600)` RGBA buffer has > 0 non-background pixels; PNG round-trip parses back via `png` crate. high-contrast — luma contrast ratio > 7.0 on foreground/background pair (WCAG AAA). slint — `cargo build --example hello_slint --features slint` green. dioxus — same. ffi-audit Docker smoke passes.
   - **Risk:** slint Theme/Style plug-in seam — verify in 1.16.1; if absent, palette mapping is docs-only note. dioxus 0.7 API churn — confirm public API surface at impl. softbuffer headless on macOS/Linux requires no display server (pure pixel buffer).
 
+- [ ] **M6 — `oxiui-compute-wgpu` + `oxiui-render-wgpu` crates.io publication and
+  oxiphysics migration** (blocked on: User `cargo publish` approval)
+  - **Goal:** Publish `oxiui-compute-wgpu` and `oxiui-render-wgpu` to crates.io
+    so downstream consumers can depend on them via version (not path deps).
+    Migrate `oxiphysics` from raw `wgpu` to these sub-crates.
+  - **`oxiui-compute-wgpu` additions completed (2026-06-02):**
+    - `SHADER_SPH_DENSITY` — cubic-spline SPH density kernel (WGSL)
+    - `SHADER_BITONIC_SORT` — in-workgroup bitonic sort ≤1024 f32 values (WGSL)
+    - `SHADER_MAP_F32_TEMPLATE` / `SHADER_ZIP_MAP_F32_TEMPLATE` — element-wise map/zip templates
+    - `Dispatcher` struct: `map_f32`, `zip_map_f32`, `reduce_sum_f32`, `sph_density`, `sort_f32`
+    - `ComputeContext::dispatcher()` convenience method
+  - **`oxiui-render-wgpu` additions completed (2026-06-02):**
+    - `SurfaceContext` — windowed surface from raw window/display handles
+    - `SurfaceConfig` — swap-chain config (dimensions, present mode, alpha mode)
+    - `SurfaceContext::acquire_frame` / `present_frame` / `resize`
+  - **oxiphysics migration steps** (once published):
+    1. Add to `oxiphysics` workspace deps:
+       ```toml
+       oxiui-compute-wgpu = "0.1"
+       oxiui-render-wgpu  = "0.1"
+       ```
+    2. In `oxiphysics-gpu/Cargo.toml`: replace `wgpu.workspace = true` with
+       `oxiui-compute-wgpu.workspace = true`; use `oxiui_compute_wgpu::wgpu::*`
+       for raw wgpu types and `oxiui_compute_wgpu::ComputeContext` instead of
+       manual Instance→Adapter→Device→Queue init.
+    3. In `oxiphysics-viz/Cargo.toml`: replace `wgpu.workspace = true` with
+       `oxiui-render-wgpu.workspace = true`; use `SurfaceContext::from_raw_handles`
+       for windowed physics visualization.
+    4. Remove direct `wgpu` dep from both crates (use the re-export from
+       `oxiui-compute-wgpu::wgpu` / `oxiui-render-wgpu::wgpu`).
+  - **Gate:** `cargo publish --dry-run -p oxiui-compute-wgpu` and
+    `cargo publish --dry-run -p oxiui-render-wgpu` pass; oxiphysics workspace
+    builds with `oxiui-compute-wgpu` in place of `wgpu`; all oxiphysics-gpu
+    tests pass.
+  - **Readiness caveats (inherit from Tier B notice):**
+    - `oxiphysics-gpu`'s CPU-simulation dispatch layer (closures over f64 data)
+      stays on CPU regardless; only the wgpu-backend hardware path migrates.
+    - `SHADER_BITONIC_SORT` handles ≤1024 elements per workgroup; for larger
+      particle counts, oxiphysics-gpu must either call sort in tiled segments or
+      switch to a multi-pass radix sort (future `SHADER_RADIX_SORT_MULTIPASS`
+      kernel).
+
 ## Per-Crate Detail
 
 Detailed TODO lists with estimated SLOC, testing plans, performance targets, and integration
@@ -91,7 +133,8 @@ requirements are maintained in each subcrate's directory:
 | [`oxiui-core`](crates/oxiui-core/TODO.md) | ~195 SLOC, seed traits only | Widget tree, layout engine (flex/grid), event dispatch, focus, hit-test, reactive state, animations |
 | [`oxiui-text`](crates/oxiui-text/TODO.md) | ~36 SLOC, pipeline wrapper | Text layout/line-breaking, text input widget, selection, IME rendering, rich text, font fallback |
 | [`oxiui-theme`](crates/oxiui-theme/TODO.md) | ~69 SLOC, dark/light palettes | High-contrast, design tokens, typography scale, CSS-like style sheets, responsive breakpoints, animation tokens |
-| [`oxiui-render-wgpu`](crates/oxiui-render-wgpu/TODO.md) | ~33 SLOC, PhantomData stub | Full GPU pipeline: shaders, texture atlas, batching, MSAA, shadows, blur, gradients, SDF text |
+| `oxiui-compute-wgpu` | ~2925 SLOC, functional | multi-pass radix sort (>1024 elements), timestamp queries, WGSL hot-reload |
+| [`oxiui-render-wgpu`](crates/oxiui-render-wgpu/TODO.md) | ~4139 SLOC, headless+surface | 3D mesh pipeline, depth buffer management, shadow maps, MSAA, post-processing |
 | [`oxiui-render-soft`](crates/oxiui-render-soft/TODO.md) | ~46 SLOC, zeroed-buffer stub | Scanline rasterizer, AA, bezier/path rendering, blending, gradient, glyph blitting, headless/PNG |
 | [`oxiui-egui`](crates/oxiui-egui/TODO.md) | ~116 SLOC, functional adapter | Expanded widget forwarding, layout, tooltips, popups, rich text, clipboard, style token mapping |
 | [`oxiui-iced`](crates/oxiui-iced/TODO.md) | ~235 SLOC, functional adapter | Text input, checkbox, slider, dropdown, layout control, state persistence, IME (blocked on iced API) |
@@ -125,3 +168,9 @@ requirements are maintained in each subcrate's directory:
    android-activity / UIKit interop) that a future `oxiui-mobile` is
    conceivable. Defer to a Phase 4 conversation, or pre-commit a tracking
    issue now?
+6. **`wgpu` direct consumers — RESOLVED (option b, 2026-06-02).** `oxiphysics`
+   (`oxiphysics-gpu`, `oxiphysics-viz`) used `wgpu` directly. Decision: **option
+   (b)** — `oxiui-compute-wgpu` is the canonical oxi* GPU-compute sub-crate.
+   `oxiui-render-wgpu` now provides `SurfaceContext` for windowed rendering.
+   Migration is blocked only on **crates.io publication** of both sub-crates.
+   See **M6** below for the publication + migration milestone.

@@ -15,7 +15,22 @@ keywords = ["gui", "cooljapan", "oxiui", "pure-rust", "widgets"]
 serde = ["dep:serde"]
 
 [dependencies]
+oxicode = { workspace = true }
 serde = { workspace = true, optional = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
+proptest  = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "layout_cache"
+harness = false
+
+[[bench]]
+name = "event_dispatch"
+harness = false
+
+[[bench]]
+name = "flexbox_layout"
+harness = false

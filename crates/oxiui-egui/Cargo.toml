@@ -12,6 +12,10 @@ keywords = ["egui", "eframe", "oxiui", "cooljapan", "pure-rust"]
 
 [features]
 default = []
+# Enable the oxiui-table integration helpers (EguiTableState bridging utilities).
+table = ["dep:oxiui-table"]
+# Enable the oxiui-accessibility bridge (A11yTree → egui AccessKit TreeUpdate).
+a11y = ["dep:oxiui-accessibility", "dep:accesskit"]
 
 [dependencies]
 oxiui-core.workspace = true
@@ -20,3 +24,14 @@ oxiui-text.workspace = true
 oxiui-theme.workspace = true
 egui.workspace = true
 eframe.workspace = true
+oxiui-table    = { workspace = true, optional = true, features = ["egui-table"] }
+oxiui-accessibility = { workspace = true, optional = true }
+accesskit      = { workspace = true, optional = true }
+
+[dev-dependencies]
+oxiui-table    = { path = "../oxiui-table", features = ["egui-table"] }
+oxiui-accessibility = { path = "../oxiui-accessibility" }
+# Integration tests construct `accesskit::NodeId` directly and compare against
+# `A11yTree::focus()`; this must be the SAME accesskit version (0.24.0) that
+# oxiui-accessibility and egui resolve to, so use the workspace pin.
+accesskit      = { workspace = true }

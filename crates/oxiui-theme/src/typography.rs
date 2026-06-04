@@ -1,7 +1,7 @@
 //! Typographic scale: named text roles with size, line-height, weight, spacing.
 
 /// A resolved text style for one typographic role.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub struct TextStyleToken {
     /// Font size in logical pixels.
     pub size: f32,
@@ -26,7 +26,7 @@ impl TextStyleToken {
 }
 
 /// The set of named typographic roles for a theme, largest to smallest.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub struct TypographyScale {
     /// Largest display text (hero headings).
     pub display: TextStyleToken,

@@ -6,6 +6,7 @@ members = [
   "crates/oxiui-theme",
   "crates/oxiui-render-wgpu",
   "crates/oxiui-render-soft",
+  "crates/oxiui-compute-wgpu",
   "crates/oxiui-egui",
   "crates/oxiui-iced",
   "crates/oxiui-table",
@@ -17,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.89"
 authors = ["COOLJAPAN OU (Team Kitasan)"]
@@ -27,18 +28,19 @@ description = "OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no
 
 [workspace.dependencies]
 # Internal path deps
-oxiui-core            = { path = "crates/oxiui-core",            version = "0.1.0" }
-oxiui-text            = { path = "crates/oxiui-text",            version = "0.1.0" }
-oxiui-theme           = { path = "crates/oxiui-theme",           version = "0.1.0" }
-oxiui-render-wgpu     = { path = "crates/oxiui-render-wgpu",     version = "0.1.0" }
-oxiui-render-soft     = { path = "crates/oxiui-render-soft",     version = "0.1.0" }
-oxiui-egui            = { path = "crates/oxiui-egui",            version = "0.1.0" }
-oxiui-iced            = { path = "crates/oxiui-iced",            version = "0.1.0" }
-oxiui-table           = { path = "crates/oxiui-table",           version = "0.1.0" }
-oxiui-accessibility   = { path = "crates/oxiui-accessibility",   version = "0.1.0" }
-oxiui-web             = { path = "crates/oxiui-web",             version = "0.1.0" }
-oxiui-slint           = { path = "crates/oxiui-slint",           version = "0.1.0" }
-oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.1.0" }
+oxiui-core            = { path = "crates/oxiui-core",            version = "0.1.1" }
+oxiui-text            = { path = "crates/oxiui-text",            version = "0.1.1" }
+oxiui-theme           = { path = "crates/oxiui-theme",           version = "0.1.1" }
+oxiui-render-wgpu     = { path = "crates/oxiui-render-wgpu",     version = "0.1.1" }
+oxiui-render-soft     = { path = "crates/oxiui-render-soft",     version = "0.1.1" }
+oxiui-compute-wgpu    = { path = "crates/oxiui-compute-wgpu",    version = "0.1.1" }
+oxiui-egui            = { path = "crates/oxiui-egui",            version = "0.1.1" }
+oxiui-iced            = { path = "crates/oxiui-iced",            version = "0.1.1" }
+oxiui-table           = { path = "crates/oxiui-table",           version = "0.1.1" }
+oxiui-accessibility   = { path = "crates/oxiui-accessibility",   version = "0.1.1" }
+oxiui-web             = { path = "crates/oxiui-web",             version = "0.1.1" }
+oxiui-slint           = { path = "crates/oxiui-slint",           version = "0.1.1" }
+oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.1.1" }
 
 # External — pinned to latest stable
 egui        = { version = "0.34.3", default-features = false }
@@ -58,9 +60,10 @@ softbuffer  = { version = "0.4.8" }
 # Pure Rust; the C-dependent paths (static-dxc, angle, vulkan-portability) stay
 # opt-in and off.  pollster blocks on wgpu's async adapter/device requests;
 # bytemuck supplies Pod/Zeroable derives for the vertex structs.
-wgpu        = { version = "29.0.3" }
-pollster    = { version = "0.4.0" }
-bytemuck    = { version = "1.25.0", features = ["derive"] }
+wgpu                = { version = "29.0.3" }
+pollster            = { version = "0.4.0" }
+bytemuck            = { version = "1.25.0", features = ["derive"] }
+raw-window-handle   = { version = "0.6" }
 # `x11` + `wayland` enabled for the same reason as eframe above (iced_winit →
 # winit needs a Linux backend to compile; both load their client libs at runtime).
 iced        = { version = "0.14.0", default-features = false, features = ["wgpu", "thread-pool", "x11", "wayland"] }
@@ -74,11 +77,46 @@ accesskit_winit = { version = "0.33.0" }
 # wasm32 deps (only used inside oxiui-web, always cfg-gated to wasm32)
 wasm-bindgen         = { version = "0.2.122" }
 wasm-bindgen-futures = { version = "0.4" }
-web-sys              = { version = "0.3.99", features = ["Window", "Document", "HtmlCanvasElement", "WebGlRenderingContext", "Event", "KeyboardEvent"] }
+web-sys              = { version = "0.3.99", features = [
+  # Core DOM
+  "Window", "Document", "HtmlCanvasElement", "HtmlElement", "CssStyleDeclaration",
+  "WebGlRenderingContext", "Event", "EventTarget", "Navigator",
+  # Mouse / pointer events
+  "MouseEvent", "WheelEvent", "PointerEvent",
+  # Keyboard events
+  "KeyboardEvent",
+  # Touch events
+  "TouchEvent", "Touch", "TouchList",
+  # Drag-and-drop
+  "DragEvent", "DataTransfer", "FileList", "File", "FileReader",
+  # Clipboard
+  "Clipboard", "ClipboardEvent",
+  # Composition (IME)
+  "CompositionEvent",
+  # Resize observer
+  "ResizeObserver", "ResizeObserverEntry",
+  # Media queries / responsive
+  "MediaQueryList", "MediaQueryListEvent",
+  # CSS / style injection
+  "HtmlStyleElement", "StyleSheet",
+  # Performance
+  "Performance", "PerformanceTiming",
+  # Service worker
+  "ServiceWorkerContainer", "ServiceWorkerRegistration",
+  # Font loading
+  "FontFace", "FontFaceSet",
+  # ARIA / accessibility helpers
+  "Element",
+  # Error handling
+  "ErrorEvent",
+  # Visibility state (visibilitychange API)
+  "VisibilityState",
+] }
 
 # Wave 1 + Wave 2 deps
-oxifont  = { version = "0.1.0" }
-oxitext  = { version = "0.1.0" }
+oxifont      = { version = "0.1.1" }
+oxitext      = { version = "0.1.1" }
+oxitext-sdf  = { version = "0.1.1" }
 
 # PNG encoding/decoding — pure Rust, zero C deps
 png = { version = "0.18.1" }
@@ -97,7 +135,32 @@ dioxus = { version = "0.7.9", default-features = false, features = ["minimal"] }
 # Serialization — Pure Rust
 serde      = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+oxicode    = { version = "0.2.4", features = ["derive"] }
 
-# Testing + parallelism — Pure Rust
-proptest = "1.11.0"
-rayon    = "1.12.0"
+# Observability — Pure Rust
+# tracing and tracing-subscriber are optional; gated behind the `tracing`
+# feature of the oxiui facade so downstream apps opt in explicitly.
+tracing            = { version = "0.1.41", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["fmt", "ansi", "env-filter"] }
+
+# Testing + parallelism + benchmarking — Pure Rust
+proptest  = "1.11.0"
+rayon     = "1.12.0"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+# SIMD — Pure Rust portable SIMD (no unsafe; works on stable)
+wide      = "1.4.0"
+
+# System tray — Pure Rust, optional, desktop only.
+# tray-icon uses winit/rwh at runtime (same as egui); no C/C++ links required.
+# NOTE: workspace deps cannot be marked optional; each consuming crate adds the
+# optional = true in its own Cargo.toml [dependencies.tray-icon] section.
+tray-icon = { version = "0.24.0", default-features = false, features = ["gtk"] }
+
+# Rusty File Dialog — Pure Rust, optional, gates native OS file pickers.
+# Uses the OS file picker API at runtime (no C/C++ linked at build time on
+# macOS/Linux; on Windows uses COM which is OS-provided, not compiled in).
+rfd       = { version = "0.17.2" }
+
+# FFT — Pure Rust OxiFFT (COOLJAPAN ecosystem; replaces rustfft)
+oxifft    = { version = "0.3.2", default-features = false, features = ["std"] }

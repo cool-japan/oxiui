@@ -3,8 +3,17 @@
 //! Computes child rectangles along a main axis with `flex-grow` distribution,
 //! `justify-content` main-axis alignment, `align-items` cross-axis alignment,
 //! and optional multi-line wrapping with `align-content` cross-axis distribution.
+//!
+//! ## Parallel subtree layout
+//!
+//! [`layout_subtrees_parallel`] dispatches a batch of independent container
+//! layouts onto Rayon's work-stealing thread pool. It is safe to call from any
+//! thread and never allocates on the common path beyond the input/output
+//! `Vec`s. Use it when you have many sibling containers whose layouts do not
+//! depend on each other.
 
 use crate::geometry::{Rect, Size};
+use rayon::prelude::*;
 
 /// The direction children are laid out along the main axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -604,6 +613,63 @@ impl FlexLayout {
     }
 }
 
+/// A single layout task for [`layout_subtrees_parallel`].
+///
+/// Encapsulates one independent subtree layout request: the flex spec, the
+/// container rectangle, and the slice of items to lay out. The result is a
+/// `Vec<Rect>` in the same order as `items`.
+pub struct LayoutTask {
+    /// The flexbox configuration to use.
+    pub layout: FlexLayout,
+    /// The container rectangle to lay out into.
+    pub container: Rect,
+    /// The items to lay out inside the container.
+    pub items: Vec<FlexItem>,
+}
+
+/// Lay out multiple **independent** subtrees in parallel on Rayon's thread pool.
+///
+/// Each [`LayoutTask`] in `tasks` is a self-contained layout (its own container
+/// rect and item list). Because no task depends on any other, Rayon can compute
+/// them concurrently across available CPU cores.
+///
+/// Returns one `Vec<Rect>` per task, in the same order as `tasks`.
+///
+/// # When to use
+///
+/// Prefer this over sequential `FlexLayout::layout` calls when:
+/// - You have ≥ 4 independent containers to lay out in one frame.
+/// - Each container has at least a handful of items (overhead dominates below ~8
+///   items on modern hardware).
+///
+/// For tiny trees, sequential layout is faster due to lower overhead.
+///
+/// # Example
+///
+/// ```rust
+/// # use oxiui_core::layout::{FlexLayout, FlexItem, LayoutTask, layout_subtrees_parallel};
+/// # use oxiui_core::geometry::{Rect, Size};
+/// let tasks: Vec<LayoutTask> = (0..8)
+///     .map(|_| LayoutTask {
+///         layout: FlexLayout::row(),
+///         container: Rect::new(0.0, 0.0, 400.0, 40.0),
+///         items: vec![
+///             FlexItem::fixed(Size::new(100.0, 40.0)),
+///             FlexItem::flexible(Size::new(50.0, 40.0)),
+///         ],
+///     })
+///     .collect();
+/// let results = layout_subtrees_parallel(&tasks);
+/// assert_eq!(results.len(), 8);
+/// assert_eq!(results[0].len(), 2);
+/// ```
+pub fn layout_subtrees_parallel(tasks: &[LayoutTask]) -> Vec<Vec<Rect>> {
+    tasks
+        .par_iter()
+        .map(|task| task.layout.layout(task.container, &task.items))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1128,5 +1194,82 @@ mod tests {
             "item0 height={}",
             rects[0].height()
         );
+    }
+
+    // ── Parallel layout tests ──────────────────────────────────────────────
+
+    /// Parallel layout of 8 independent row containers produces identical
+    /// results to sequential layout.
+    #[test]
+    fn parallel_layout_matches_sequential() {
+        let tasks: Vec<LayoutTask> = (0..8_u32)
+            .map(|i| LayoutTask {
+                layout: FlexLayout::row(),
+                container: Rect::new(0.0, 0.0, 400.0, 40.0),
+                items: vec![
+                    FlexItem::fixed(Size::new(100.0, 40.0)),
+                    FlexItem::flexible(Size::new(50.0 + i as f32, 40.0)),
+                ],
+            })
+            .collect();
+
+        let parallel_results = layout_subtrees_parallel(&tasks);
+        assert_eq!(parallel_results.len(), 8);
+
+        for (task, par_rects) in tasks.iter().zip(parallel_results.iter()) {
+            let seq_rects = task.layout.layout(task.container, &task.items);
+            assert_eq!(seq_rects.len(), par_rects.len());
+            for (sr, pr) in seq_rects.iter().zip(par_rects.iter()) {
+                assert!(
+                    close(sr.left(), pr.left()) && close(sr.width(), pr.width()),
+                    "parallel and sequential results diverge"
+                );
+            }
+        }
+    }
+
+    /// Parallel layout of an empty task list returns an empty result.
+    #[test]
+    fn parallel_layout_empty_tasks() {
+        let results = layout_subtrees_parallel(&[]);
+        assert!(results.is_empty());
+    }
+
+    /// Parallel layout of a single task with an empty item list returns an
+    /// empty rect vec (mirrors the sequential behaviour).
+    #[test]
+    fn parallel_layout_single_empty_items() {
+        let tasks = [LayoutTask {
+            layout: FlexLayout::column(),
+            container: Rect::new(0.0, 0.0, 200.0, 200.0),
+            items: vec![],
+        }];
+        let results = layout_subtrees_parallel(&tasks);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    /// Parallel layout scales correctly: 64 column containers, each with 3 items.
+    #[test]
+    fn parallel_layout_large_batch() {
+        let tasks: Vec<LayoutTask> = (0..64)
+            .map(|_| LayoutTask {
+                layout: FlexLayout::column(),
+                container: Rect::new(0.0, 0.0, 100.0, 150.0),
+                items: vec![
+                    FlexItem::fixed(Size::new(100.0, 30.0)),
+                    FlexItem::flexible(Size::new(100.0, 20.0)),
+                    FlexItem::fixed(Size::new(100.0, 30.0)),
+                ],
+            })
+            .collect();
+        let results = layout_subtrees_parallel(&tasks);
+        assert_eq!(results.len(), 64);
+        for rects in &results {
+            assert_eq!(rects.len(), 3);
+            // Items must be stacked vertically (non-decreasing top).
+            assert!(rects[0].top() <= rects[1].top());
+            assert!(rects[1].top() <= rects[2].top());
+        }
     }
 }

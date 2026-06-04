@@ -67,6 +67,33 @@ pub use tile::{
 pub mod backend;
 pub use backend::{blit_glyph_bitmap, SoftBackend};
 
+/// SIMD-accelerated bulk pixel operations (Pure-Rust `wide` crate).
+///
+/// All functions have scalar fallbacks — callers never need to feature-gate
+/// individual call sites.  The `simd` feature enables 8-wide SIMD paths.
+pub mod simd_fill;
+pub use simd_fill::{alpha_blend_row, fill_solid, gradient_row_horizontal};
+
+/// FFT-accelerated Gaussian blur for large kernels (OxiFFT, COOLJAPAN ecosystem).
+///
+/// Enable the `fft-blur` feature for the OxiFFT-backed path; without it the
+/// module exposes only `should_use_fft_blur` and the stub `gaussian_blur_alpha_fft`.
+pub mod fft_blur;
+pub use fft_blur::{gaussian_blur_alpha_fft, should_use_fft_blur, FFT_BLUR_MIN_RADIUS};
+
+/// Runtime CPU/GPU backend switching via shared [`oxiui_core::paint::DrawList`].
+///
+/// The `wgpu-compat` feature must be enabled to use the GPU variant.
+pub mod backend_switch;
+pub use backend_switch::{BackendKind, DynBackend};
+
+/// Canvas 2D pixel upload path for wasm32 targets.
+///
+/// Enabled by the `canvas-2d` feature.  On native targets the upload
+/// functions are no-ops that always return `Ok(())`.
+pub mod canvas_upload;
+pub use canvas_upload::{framebuffer_to_rgba8, upload_framebuffer, upload_rgba};
+
 /// Re-export [`oxiui_theme::ShadowSpec`] when the `theme` feature is active so
 /// integration tests can address it as `oxiui_render_soft::ShadowSpec`.
 #[cfg(feature = "theme")]

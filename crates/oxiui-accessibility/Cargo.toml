@@ -12,7 +12,10 @@ keywords = ["accessibility", "a11y", "accesskit", "cooljapan", "pure-rust"]
 
 [features]
 default = []
+## Enable the `oxiui-text` bridge: convert `TextInput` / `TextArea` into `A11yNode`.
+text-bridge = ["dep:oxiui-text"]
 
 [dependencies]
 accesskit    = { workspace = true }
 oxiui-core   = { workspace = true }
+oxiui-text   = { workspace = true, optional = true }

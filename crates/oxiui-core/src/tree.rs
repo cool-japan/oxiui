@@ -4,8 +4,21 @@
 //! traversal, and accessibility-tree generation. The immediate-mode
 //! [`UiCtx`](crate::UiCtx) path does not require it; adapters that need a
 //! persistent tree (e.g. `oxiui-accessibility`) build one here.
+//!
+//! ## Arena-style allocation
+//!
+//! Nodes are stored in a flat [`Vec`] (the *arena*). A companion
+//! `HashMap<WidgetId, usize>` (*index*) maps every live [`WidgetId`] to its
+//! slot in the vec in O(1). This makes `get` / `get_mut` / `index_of` all
+//! O(1) instead of O(n), which matters for trees with thousands of nodes.
+//!
+//! When a node is removed its slot is swapped with the last element and the
+//! index is updated, keeping the vec compact (no holes). The index is the
+//! single source of truth for liveness: a [`WidgetId`] absent from the index
+//! is definitively dead.
 
 use crate::geometry::{Point, Rect};
+use std::collections::HashMap;
 
 /// A stable, unique identifier for a node within a single [`WidgetTree`].
 ///
@@ -106,11 +119,17 @@ impl WidgetNode {
 
 /// A tree of [`WidgetNode`]s addressed by [`WidgetId`].
 ///
-/// Nodes are stored in a flat vector; parent/child relationships are tracked by
-/// id. The tree always contains a root node (`WidgetId::ROOT`).
+/// Nodes are stored in a flat arena vector; parent/child relationships are
+/// tracked by id. A companion `HashMap` index provides O(1) lookup from id to
+/// vec slot. The tree always contains a root node (`WidgetId::ROOT`).
+///
+/// See the module-level documentation for the arena allocation strategy.
 #[derive(Debug)]
 pub struct WidgetTree {
+    /// Arena: flat storage of all live nodes.
     nodes: Vec<WidgetNode>,
+    /// O(1) index: maps WidgetId → arena slot index.
+    index: HashMap<WidgetId, usize>,
     alloc: WidgetIdAllocator,
 }
 
@@ -119,8 +138,11 @@ impl WidgetTree {
     pub fn new(root_rect: Rect) -> Self {
         let mut root = WidgetNode::new(WidgetId::ROOT, root_rect);
         root.label = Some("root".to_owned());
+        let mut index = HashMap::new();
+        index.insert(WidgetId::ROOT, 0usize);
         Self {
             nodes: vec![root],
+            index,
             alloc: WidgetIdAllocator::new(),
         }
     }
@@ -136,7 +158,7 @@ impl WidgetTree {
     }
 
     fn index_of(&self, id: WidgetId) -> Option<usize> {
-        self.nodes.iter().position(|n| n.id == id)
+        self.index.get(&id).copied()
     }
 
     /// Borrow a node by id.
@@ -154,9 +176,11 @@ impl WidgetTree {
     pub fn insert(&mut self, parent: WidgetId, rect: Rect) -> Option<WidgetId> {
         self.index_of(parent)?;
         let id = self.alloc.alloc();
+        let new_idx = self.nodes.len();
         let mut node = WidgetNode::new(id, rect);
         node.parent = Some(parent);
         self.nodes.push(node);
+        self.index.insert(id, new_idx);
         if let Some(pi) = self.index_of(parent) {
             self.nodes[pi].children.push(id);
         }
@@ -186,7 +210,16 @@ impl WidgetTree {
             }
         }
         let removed = to_remove.len();
+        // Remove the nodes from the arena.
         self.nodes.retain(|n| !to_remove.contains(&n.id));
+        // Remove stale index entries for the removed ids.
+        for rid in &to_remove {
+            self.index.remove(rid);
+        }
+        // Rebuild the remaining index entries (positions may have shifted after retain).
+        for (slot, node) in self.nodes.iter().enumerate() {
+            self.index.insert(node.id, slot);
+        }
         removed
     }
 

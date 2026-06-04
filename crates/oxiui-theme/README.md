@@ -11,7 +11,7 @@ Everything is expressed in terms of `oxiui-core`'s `Theme`, `Palette`, `Color`, 
 
 ```toml
 [dependencies]
-oxiui-theme = "0.1.0"
+oxiui-theme = "0.1.1"
 ```
 
 ## Quick Start

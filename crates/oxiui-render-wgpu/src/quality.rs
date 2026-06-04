@@ -76,6 +76,14 @@ impl RenderQuality {
             text: TextQuality::Sdf,
         }
     }
+
+    /// Returns the effective sample count (1, 4, or 8). Always a power of two.
+    pub fn sample_count(&self) -> u32 {
+        match self.msaa {
+            4 | 8 => self.msaa,
+            _ => 1,
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

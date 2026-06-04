@@ -100,6 +100,37 @@ impl GradientStop {
     }
 }
 
+// ── BlendMode ───────────────────────────────────────────────────────────────
+
+/// The compositing mode used when drawing subsequent primitives.
+///
+/// Applied to all draw commands after a [`DrawCommand::SetBlendMode`] until
+/// the next blend-mode change or end of the [`DrawList`].
+///
+/// The default mode (at the start of every [`DrawList`]) is [`BlendMode::Normal`]
+/// (standard source-over alpha compositing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum BlendMode {
+    /// Standard source-over alpha compositing (`Cs + Cd·(1 − αs)`).
+    #[default]
+    Normal,
+    /// Multiply blend: `Cs · Cd` — darkens.
+    Multiply,
+    /// Screen blend: `1 − (1 − Cs)·(1 − Cd)` — lightens.
+    Screen,
+    /// Overlay: multiply for darks, screen for lights.
+    Overlay,
+    /// Darken: `min(Cs, Cd)`.
+    Darken,
+    /// Lighten: `max(Cs, Cd)`.
+    Lighten,
+    /// Source replaces destination (no blending).
+    Copy,
+    /// Destination is unmodified (fully transparent source).
+    Destination,
+}
+
 // ── ImageFilter ─────────────────────────────────────────────────────────────
 
 /// The sampling filter applied when scaling an image.
@@ -507,6 +538,37 @@ pub enum DrawCommand {
         /// Text colour.
         color: Color,
     },
+
+    // ── Blend mode ────────────────────────────────────────────────────────
+    /// Set the blend mode for all subsequent draw commands.
+    ///
+    /// The blend mode remains in effect until the next `SetBlendMode` command
+    /// or the end of the draw list.  The initial blend mode at the start of
+    /// every frame is [`BlendMode::Normal`].
+    ///
+    /// Backends that do not support non-Normal blend modes may ignore this
+    /// command and continue rendering with source-over compositing.
+    SetBlendMode {
+        /// The compositing mode to apply to subsequent commands.
+        mode: BlendMode,
+    },
+
+    // ── Backdrop blur ─────────────────────────────────────────────────────
+    /// Apply a Gaussian blur to the content already rendered behind this rect
+    /// (frosted-glass / backdrop-blur effect).
+    ///
+    /// The blur is applied to the colour data that has been rendered into the
+    /// target *before* this command.  The blurred result replaces the content
+    /// in `rect` on the target.  Commands issued after `BackdropBlur` paint
+    /// on top of the blurred backdrop.
+    ///
+    /// Backends that do not support backdrop blur may ignore this command.
+    BackdropBlur {
+        /// The rectangular region to blur.
+        rect: Rect,
+        /// Blur radius in logical pixels (1 σ ≈ `blur_radius / 3`).
+        blur_radius: f32,
+    },
 }
 
 // ── DrawList ─────────────────────────────────────────────────────────────────
@@ -768,6 +830,22 @@ impl DrawList {
         });
     }
 
+    /// Set the blend mode for all subsequent draw commands.
+    ///
+    /// The mode remains active until the next `push_blend_mode` call.
+    /// The initial mode at the start of every frame is [`BlendMode::Normal`].
+    pub fn push_blend_mode(&mut self, mode: BlendMode) {
+        self.push(DrawCommand::SetBlendMode { mode });
+    }
+
+    /// Apply a backdrop blur (frosted-glass effect) to the region `rect`.
+    ///
+    /// Blurs the previously-rendered content behind `rect` by `blur_radius` pixels.
+    /// Subsequent commands draw on top of the blurred result.
+    pub fn push_backdrop_blur(&mut self, rect: Rect, blur_radius: f32) {
+        self.push(DrawCommand::BackdropBlur { rect, blur_radius });
+    }
+
     // ── Private helpers ──────────────────────────────────────────────────
 
     /// Compute a conservative bounding rect for `cmd`, or `None` for
@@ -856,6 +934,23 @@ impl DrawList {
             }),
 
             DrawCommand::PushClip { .. } | DrawCommand::PopClip => None,
+
+            DrawCommand::SetBlendMode { .. } => None,
+
+            DrawCommand::BackdropBlur { rect, blur_radius } => {
+                let pad = *blur_radius;
+                Some(Rect::new(
+                    rect.left() - pad,
+                    rect.top() - pad,
+                    rect.width() + 2.0 * pad,
+                    rect.height() + 2.0 * pad,
+                ))
+            }
+
+            // Non-exhaustive fallback: catches any future variants added to the
+            // enum before they get explicit bounds entries.
+            #[allow(unreachable_patterns)]
+            _ => None,
         }
     }
 }
@@ -903,6 +998,21 @@ pub trait RenderBackend {
 
     /// Return `true` if this backend can render text via [`DrawCommand::DrawText`].
     fn supports_text(&self) -> bool {
+        false
+    }
+
+    /// Return `true` if this backend honours [`DrawCommand::SetBlendMode`]
+    /// commands (non-`Normal` blend modes).
+    ///
+    /// When `false` the backend renders all primitives with source-over
+    /// compositing regardless of the active blend mode.
+    fn supports_blend_modes(&self) -> bool {
+        false
+    }
+
+    /// Return `true` if this backend can apply a backdrop blur via
+    /// [`DrawCommand::BackdropBlur`].
+    fn supports_backdrop_blur(&self) -> bool {
         false
     }
 }

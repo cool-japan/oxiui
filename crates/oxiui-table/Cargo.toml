@@ -12,11 +12,38 @@ categories  = ["gui"]
 
 [features]
 default    = []
-egui-table = ["dep:egui", "dep:eframe"]
-iced-table = ["dep:iced"]
+egui-table    = ["dep:egui", "dep:eframe"]
+iced-table    = ["dep:iced"]
+text-table    = ["dep:oxiui-text"]
+theme-table   = ["dep:oxiui-theme"]
+a11y-table    = ["dep:oxiui-accessibility", "dep:accesskit"]
+persist-table = ["dep:oxicode"]
 
 [dependencies]
 oxiui-core = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[dependencies.oxiui-text]
+workspace = true
+optional  = true
+
+[dependencies.oxiui-theme]
+workspace = true
+optional  = true
+
+[dependencies.oxiui-accessibility]
+workspace = true
+optional  = true
+
+[dependencies.oxicode]
+workspace = true
+optional  = true
+
+[dependencies.accesskit]
+workspace = true
+optional  = true
 
 [dependencies.egui]
 workspace = true

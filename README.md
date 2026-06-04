@@ -1,6 +1,6 @@
 # OxiUI
 
-**Version 0.1.0 — 2026-06-01**
+**Version 0.1.1 — 2026-06-04**
 
 OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no
 SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings. It is a
@@ -11,7 +11,7 @@ windowed through **winit**, with all text shaped through **OxiText** +
 build with a single `cargo build` in a fresh `rust:slim` container, with no
 `libgtk-dev`, `libqt-dev`, or `libsdl2-dev` choreography.
 
-## Status: v0.1.0 — Milestones M0–M5 complete
+## Status: v0.1.1 — Milestones M0–M5 complete
 
 All six planned milestones for the initial release are done:
 
@@ -29,13 +29,13 @@ All six planned milestones for the initial release are done:
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.1.0"
+oxiui = "0.1.1"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.1.0", default-features = false, features = ["software"] }
+oxiui = { version = "0.1.1", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.1.0", features = ["iced"] }
+oxiui = { version = "0.1.1", features = ["iced"] }
 ```
 
 ```rust
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tests
 
-1 257 unit tests across 13 crates — all pass (`cargo nextest run`).
+1 948 unit tests across 14 crates — all pass (`cargo nextest run`).
 
 ## Replaces (FFI being eliminated)
 

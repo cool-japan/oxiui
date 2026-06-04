@@ -14,10 +14,10 @@ Slint ships a Pure-Rust CPU renderer (`renderer-software`), so the adapter intro
 ```toml
 [dependencies]
 # Collection mode only — no Slint dependency, no GPL implications
-oxiui-slint = "0.1.0"
+oxiui-slint = "0.1.1"
 
 # Enable Slint rendering (pulls in the GPL/royalty-free/commercial slint crate)
-oxiui-slint = { version = "0.1.0", features = ["slint"] }
+oxiui-slint = { version = "0.1.1", features = ["slint"] }
 ```
 
 ## Quick Start

@@ -138,7 +138,7 @@ Functional virtualized table widget (~650 SLOC across core files). Provides `Tab
 - [x] Sort index: maintain a pre-sorted index array instead of re-sorting all data on each frame (`TableIndex` in `header.rs`)
 - [x] Filter index: maintain a filtered row-index list, avoid scanning all rows each frame when filter is active (`TableIndex` in `header.rs`)
 - [x] Virtual column rendering: for tables with many columns (50+), only render columns visible in the horizontal viewport
-- [ ] Async data loading: `AsyncRowSource` trait with `async fn row(index) -> Vec<Cell>`, background prefetch of rows near viewport edges
+- [x] Async data loading: `AsyncRowSource` trait with `fn row_async(index) -> BoxFuture<Result<Vec<Cell>,TableError>>`, `PrefetchBuffer<S>` LRU cache wrapper implementing `RowSource`, `request_prefetch`/`flush_pending` API — 13 tests in `async_source.rs` (done 2026-06-03)
 - [x] Cumulative height cache: prefix-sum array for variable-height rows, O(log n) binary search for scroll-to-row
   - **Goal:** Row vertical positioning is O(log n) via a prefix-sum cumulative-height cache supporting binary-search `row_at_offset`.
   - **Design:** New `CumulativeHeightCache{heights: Vec<f32>, prefix_sums: Vec<f32>, dirty: bool}`. `rebuild(row_heights)` computes prefix sums. `row_at_offset(y) -> usize` uses `partition_point` (std binary search). `visible_range(viewport_y, viewport_height) -> Range<usize>` calls `row_at_offset` twice. Invalidation: `mark_dirty()` + lazy rebuild on next access.
@@ -148,12 +148,12 @@ Functional virtualized table widget (~650 SLOC across core files). Provides `Tab
 
 ## Integration
 - [x] `oxiui-core` integration: `Table` should implement the `Widget` trait, rendering through `UiCtx` generically (not directly through egui/iced)
-- [ ] `oxiui-text` integration: cell text rendered through `TextPipeline` for consistent CJK/emoji display, rich text cells with styled spans
-- [ ] `oxiui-theme` integration: row striping colors, header background, selection highlight, focus ring colors from theme `DesignTokens`
+- [x] `oxiui-text` integration: cell text rendered through `TextPipeline` for consistent CJK/emoji display, rich text cells with styled spans — `src/text_integration.rs`: `RichCell` (multi-span), `StyledSpan`, `CellRichExt` trait; `shape_spans`/`measure` via `TextPipeline` behind `text-table` feature; 11 tests (CJK/emoji/plain/typed cell conversions) (done 2026-06-03)
+- [x] `oxiui-theme` integration: row striping colors, header background, selection highlight, focus ring colors from theme `DesignTokens` — `src/theme_integration.rs`: `TableTheme` RGBA colour tokens with `Default` (Tokyo Night), `from_palette` (builds from `oxiui_core::Palette` + optional `DesignTokens`), `from_tokens`, `effective_row_bg` (alpha-blend selection over zebra/normal rows); `is_dark()` helper; 13 tests; behind `theme-table` feature (done 2026-06-03)
 - [x] `oxiui-egui` integration: expand `render_egui` with column sorting headers (clickable, ▲/▼ indicator), cell alignment, zebra striping
 - [x] `oxiui-iced` integration: expand `render_iced` with sorting indicators (▲/▼) and sticky header above scrollable body; `scrollable::Id`-based offset tracking deferred to a future revision
-- [ ] `oxiui-accessibility` integration: each row as `WidgetRole::TableRow`, each cell as `WidgetRole::TableCell`, column headers as labeled, selected rows announced
-- [ ] COOLJAPAN ecosystem: CSV export without external CSV crate (manual string building or lightweight Pure Rust CSV) ✓ already implemented; data serialization via oxicode for table state persistence; no zip/flate2 for export compression (use oxiarc-* if needed)
+- [x] `oxiui-accessibility` integration: each row as `WidgetRole::TableRow`, each cell as `WidgetRole::TableCell`, column headers as labeled, selected rows announced — `src/accessibility.rs`: `LightNode`/`A11yRole` (dependency-free), `build_table_a11y_tree` + `build_table_a11y_with_text` (pure-Rust tree with row/cell/header nodes, `is_selected` propagation); `build_table_a11y_full` + `build_table_a11y_full_with_text` (full `oxiui_accessibility::A11yNode` tree, `selected_rows` support) behind `a11y-table` feature; 14 tests (done 2026-06-03)
+- [x] COOLJAPAN ecosystem: CSV export without external CSV crate (manual string building or lightweight Pure Rust CSV) ✓ already implemented; data serialization via oxicode for table state persistence; no zip/flate2 for export compression (use oxiarc-* if needed) — `src/persistence.rs`: `TableState` (`oxicode::Encode`+`Decode`) captures column widths/order/sort/filters/pagination/pinned/zebra; `TableStateDiff` + `diff`/`apply_diff` for incremental sync; `encode_to_vec`/`decode_from_slice` behind `persist-table` feature; 13 tests (done 2026-06-03)
 
 ## Proposed follow-ups
 

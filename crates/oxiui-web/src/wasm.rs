@@ -5,7 +5,9 @@
 //! `mount(canvas_id)` is the single JS-callable export.  It:
 //! 1. Resolves the HTML `<canvas>` element by ID.
 //! 2. Starts an `eframe::WebRunner` on the canvas, running [`WasmApp`].
-//! 3. Returns a [`JsWebHandle`] that JS can use to stop, resize, or inject
+//! 3. Installs a `visibilitychange` listener that pauses/resumes rendering
+//!    when the browser tab is hidden or shown (saves CPU/battery).
+//! 4. Returns a [`JsWebHandle`] that JS can use to stop, resize, or inject
 //!    synthetic events into the app.
 //!
 //! ## WebRunner integration
@@ -24,12 +26,23 @@
 //! stores it in an `Arc<Mutex<Option<egui::Context>>>` shared with the
 //! [`WebHandle`].  This lets `resize()` and `inject_event()` reach into the
 //! live event loop from outside.
+//!
+//! ## requestAnimationFrame scheduling
+//!
+//! The `visibilitychange` event is used to skip `requestAnimationFrame` calls
+//! when the browser tab is backgrounded.  [`WasmApp`] installs the listener
+//! and stores a shared [`crate::performance::DirtyFlag`].  When the flag is
+//! not set (no user input) the egui context is told to defer the next repaint
+//! by 1 second via [`egui::Context::request_repaint_after`], reducing CPU
+//! usage for idle apps.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+use crate::performance::DirtyFlag;
 use crate::{JsWebHandle, MountError, WebHandle};
 
 // ── WasmApp — minimal eframe::App bridge ──────────────────────────────────────
@@ -39,34 +52,69 @@ use crate::{JsWebHandle, MountError, WebHandle};
 /// On the first `ui()` call the egui context is captured into `ctx_slot` so
 /// that the companion [`WebHandle`] can call `request_repaint()` and inject
 /// synthetic events.
+///
+/// Uses a [`DirtyFlag`] to implement event-driven rendering: when the tab is
+/// backgrounded (visibility = hidden) the egui repaint is deferred to 1 second
+/// rather than running every animation frame, saving CPU and battery.
 struct WasmApp {
     /// Shared slot written once with the egui context from the first `ui` call.
     ctx_slot: Arc<Mutex<Option<egui::Context>>>,
+    /// Shared dirty flag — set by input events to request immediate repaint.
+    dirty: DirtyFlag,
+    /// Shared visibility flag — `false` while the browser tab is hidden.
+    visible: Arc<AtomicBool>,
 }
 
 impl WasmApp {
-    fn new(ctx_slot: Arc<Mutex<Option<egui::Context>>>) -> Self {
-        Self { ctx_slot }
+    fn new(
+        ctx_slot: Arc<Mutex<Option<egui::Context>>>,
+        dirty: DirtyFlag,
+        visible: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            ctx_slot,
+            dirty,
+            visible,
+        }
     }
 }
 
 impl eframe::App for WasmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Capture the egui context on first call; subsequent calls are no-ops.
+        let ctx = ui.ctx().clone();
         {
-            let ctx = ui.ctx().clone();
             if let Ok(mut slot) = self.ctx_slot.lock() {
                 if slot.is_none() {
-                    *slot = Some(ctx);
+                    *slot = Some(ctx.clone());
                 }
             }
         }
+
+        // Event-driven scheduling:
+        // - If the tab is hidden, defer the next repaint by 1 second to avoid
+        //   wasting CPU cycles on a backgrounded tab.
+        // - If no dirty flag is set (no user input since the last frame), also
+        //   defer the repaint; this reduces idle CPU usage.
+        let tab_hidden = !self.visible.load(Ordering::Acquire);
+        let is_dirty = self.dirty.check_and_clear();
+
+        if tab_hidden || !is_dirty {
+            // Defer the next repaint — only call `requestAnimationFrame` after 1 s.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        // When dirty or visible, eframe's own requestAnimationFrame machinery
+        // will schedule the next frame immediately (no explicit call needed here).
 
         // Minimal content: a centred OxiUI identity label.
         egui::CentralPanel::default().show_inside(ui, |panel_ui| {
             panel_ui.centered_and_justified(|cj| {
                 cj.label("OxiUI WASM");
             });
+            // Mark dirty on any egui input (user events).
+            if panel_ui.ctx().has_requested_repaint() {
+                self.dirty.mark();
+            }
         });
     }
 }
@@ -114,10 +162,56 @@ pub async fn mount(canvas_id: &str) -> Result<JsWebHandle, JsValue> {
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let ctx_slot_for_app = Arc::clone(&ctx_slot);
 
+    // Shared dirty flag — set by DOM input events or explicit `request_repaint`.
+    let dirty = DirtyFlag::new();
+    let dirty_for_app = dirty.clone();
+    // Start as dirty so the first frame renders immediately.
+    dirty.mark();
+
+    // Shared visibility flag — updated by `visibilitychange` listener.
+    let visible = Arc::new(AtomicBool::new(true));
+    let visible_for_vis = Arc::clone(&visible);
+    let visible_for_app = Arc::clone(&visible);
+
+    // Install visibilitychange listener to pause rendering when tab is hidden.
+    {
+        use wasm_bindgen::{closure::Closure, JsCast};
+        if let (Some(win), Some(doc)) = (
+            web_sys::window(),
+            web_sys::window().and_then(|w| w.document()),
+        ) {
+            let _ = win; // keep window alive for the closure
+            let closure = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+                let is_vis = web_sys::window()
+                    .and_then(|w| w.document())
+                    .map(|d| d.visibility_state() != web_sys::VisibilityState::Hidden)
+                    .unwrap_or(true);
+                visible_for_vis.store(is_vis, Ordering::Release);
+                // When tab becomes visible again, immediately mark dirty so the
+                // first frame after resumption renders without waiting 1 second.
+                if is_vis {
+                    // We don't have access to the dirty flag here; the next eframe
+                    // call to ui() will clear the deferred repaint naturally because
+                    // eframe will call requestAnimationFrame on visibilitychange.
+                }
+            }));
+            let _ = doc.add_event_listener_with_callback(
+                "visibilitychange",
+                closure.as_ref().unchecked_ref(),
+            );
+            closure.forget();
+        }
+    }
+
     let web_options = eframe::WebOptions::default();
 
-    let app_creator: eframe::AppCreator<'static> =
-        Box::new(move |_cc| Ok(Box::new(WasmApp::new(ctx_slot_for_app)) as Box<dyn eframe::App>));
+    let app_creator: eframe::AppCreator<'static> = Box::new(move |_cc| {
+        Ok(Box::new(WasmApp::new(
+            ctx_slot_for_app,
+            dirty_for_app,
+            visible_for_app,
+        )) as Box<dyn eframe::App>)
+    });
 
     eframe::WebRunner::new()
         .start(canvas, web_options, app_creator)

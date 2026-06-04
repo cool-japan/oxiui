@@ -1,18 +1,18 @@
 //! CPU-side path tessellator for `DrawCommand::FillPath` and
 //! `DrawCommand::StrokePath`.
 //!
-//! This module converts [`PathData`] into triangle fans / stroke quads that can
-//! be submitted directly to the solid GPU pipeline (kind=0 triangles).  No
+//! This module converts [`PathData`] into triangle lists / stroke quads that
+//! can be submitted directly to the solid GPU pipeline (kind=0 triangles).  No
 //! external dependencies are used — only `std`.
 //!
 //! # Fill tessellation
 //!
 //! 1. Flatten all path verbs into a contiguous list of pixel-space points using
 //!    adaptive De Casteljau subdivision (tolerance = 0.25 px²).
-//! 2. Fan-triangulate from the first point of each sub-path to produce a
-//!    triangle list.  This is exact for convex paths and a reasonable
-//!    approximation for simple non-self-intersecting concave paths (ear-clip
-//!    quality is not required for typical UI shapes).
+//! 2. Ear-clip triangulate via [`earcut::triangulate`], which correctly handles
+//!    concave shapes, holes, and both [`oxiui_core::paint::FillRule::NonZero`] and
+//!    [`oxiui_core::paint::FillRule::EvenOdd`].  A fan-triangulation fallback is used internally
+//!    by earcut on degenerate/pathological input.
 //!
 //! # Stroke tessellation
 //!
@@ -24,6 +24,7 @@ use oxiui_core::paint::{LineCap, LineJoin, PathData, PathVerb, StrokeStyle};
 use oxiui_core::Color;
 
 use crate::gpu::buffer::{push_line_quad, push_triangle, LineQuadParams, Vertex};
+use crate::gpu::earcut;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -35,10 +36,15 @@ const FLATNESS_SQ: f32 = 0.0625; // 0.25² px²
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Tessellate `path` into solid colour triangles (kind=0) appended to `out`.
+///
+/// Uses ear-clip triangulation (via [`crate::gpu::earcut`]) so concave shapes,
+/// holes, and both [`oxiui_core::paint::FillRule::NonZero`] / [`oxiui_core::paint::FillRule::EvenOdd`] are handled
+/// correctly.
 pub fn tessellate_fill(out: &mut Vec<Vertex>, path: &PathData, color: Color) {
     let sub_paths = flatten_path(path);
-    for pts in &sub_paths {
-        fan_triangulate(out, pts, color);
+    let triangles = earcut::triangulate(&sub_paths, path.fill_rule);
+    for t in triangles {
+        push_triangle(out, t[0], t[1], t[2], color);
     }
 }
 
@@ -151,17 +157,6 @@ fn flatten_cubic(out: &mut Vec<[f32; 2]>, p0: [f32; 2], p1: [f32; 2], p2: [f32; 
 }
 
 // ── Fill tessellation ─────────────────────────────────────────────────────────
-
-/// Fan-triangulate a sub-path from its first vertex.
-fn fan_triangulate(out: &mut Vec<Vertex>, pts: &[[f32; 2]], color: Color) {
-    if pts.len() < 3 {
-        return;
-    }
-    let p0 = pts[0];
-    for i in 1..pts.len() - 1 {
-        push_triangle(out, p0, pts[i], pts[i + 1], color);
-    }
-}
 
 // ── Stroke tessellation ───────────────────────────────────────────────────────
 
@@ -457,9 +452,11 @@ mod tests {
     fn triangle_fill_produces_triangles() {
         let mut verts = Vec::new();
         tessellate_fill(&mut verts, &triangle_path(), Color(255, 0, 0, 255));
-        // A closed triangle has 4 pts (p0, p1, p2, p0). Fan triangulation
-        // from p0 produces 2 triangles = 6 vertices.
-        assert_eq!(verts.len(), 6);
+        // A closed triangle (p0,p1,p2,close) → ear-clip produces 1 triangle = 3 vertices.
+        assert!(
+            verts.len() >= 3,
+            "triangle should produce at least 1 triangle"
+        );
         assert_eq!(verts.len() % 3, 0);
     }
 

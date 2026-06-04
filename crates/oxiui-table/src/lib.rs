@@ -42,6 +42,8 @@ mod filter;
 mod selection;
 mod sort;
 
+pub mod accessibility;
+pub mod async_source;
 pub mod clipboard;
 pub mod format;
 pub mod header;
@@ -49,6 +51,9 @@ pub mod height;
 pub mod height_cache;
 pub mod nav;
 pub mod pagination;
+pub mod persistence;
+pub mod text_integration;
+pub mod theme_integration;
 
 #[cfg(feature = "egui-table")]
 mod egui_table;
@@ -64,6 +69,7 @@ pub use filter::{apply_all, filter_indices, ColumnFilter};
 pub use selection::{SelectionMode, SelectionModel};
 pub use sort::{sort_indices, SortDirection, SortState};
 
+pub use async_source::{AsyncRowSource, BoxFuture, PrefetchBuffer};
 pub use clipboard::{selection_to_tsv, CaptureClipboard, ClipboardSink, NullClipboard};
 pub use format::{CellFormatter, DateFormatter, DefaultFormatter, NumberFormatter};
 pub use header::{handle_row_click, move_column, HeaderSortState, TableIndex};
@@ -76,7 +82,9 @@ pub use pagination::PaginationState;
 pub use egui_table::EguiTableState;
 
 #[cfg(feature = "iced-table")]
-pub use iced_table::{render_iced, render_iced_with_filters};
+pub use iced_table::{
+    render_iced, render_iced_sortable, render_iced_with_filters, render_iced_with_selection,
+};
 
 /// The default row height in logical pixels, used by [`RowSource::row_height`]
 /// when no per-row override is provided.

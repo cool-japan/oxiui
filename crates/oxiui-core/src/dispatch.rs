@@ -124,9 +124,33 @@ struct NodeHandlers {
 /// The dispatcher owns the handler registry but borrows the tree only
 /// immutably (to compute the ancestor path), so a caller can keep mutating the
 /// tree between dispatches.
-#[derive(Default)]
+///
+/// ## Allocation-free fast path
+///
+/// The path buffer and the deferred-edit buffer are both held as pre-allocated
+/// `Vec`s that are cleared and reused across dispatches. This means that after
+/// the first event of each size class, dispatch is completely heap-allocation-free
+/// on the hot path (no new `Vec` allocations during capture/bubble traversal).
 pub struct EventDispatcher {
     handlers: std::collections::HashMap<WidgetId, NodeHandlers>,
+    /// Re-used scratch buffer: the ancestor path (root → target).
+    /// Cleared and refilled on every [`dispatch`](EventDispatcher::dispatch) call.
+    path_scratch: Vec<WidgetId>,
+    /// Re-used scratch buffer: deferred registry edits queued by handlers.
+    /// Cleared and drained on every [`dispatch`](EventDispatcher::dispatch) call.
+    pending_scratch: Vec<RegistryEdit>,
+}
+
+impl Default for EventDispatcher {
+    fn default() -> Self {
+        Self {
+            handlers: std::collections::HashMap::new(),
+            // Pre-allocate for 32-node deep trees (typical UI depth is 5–15).
+            path_scratch: Vec::with_capacity(32),
+            // Pre-allocate for a handful of edits per dispatch (rarely > 2).
+            pending_scratch: Vec::with_capacity(4),
+        }
+    }
 }
 
 impl EventDispatcher {
@@ -157,16 +181,17 @@ impl EventDispatcher {
         self.handlers.len()
     }
 
-    /// Compute the capture path root → target (inclusive) for `target`.
-    fn path_to(tree: &WidgetTree, target: WidgetId) -> Vec<WidgetId> {
-        let mut path = Vec::new();
+    /// Compute the capture path root → target into `out` (cleared first).
+    ///
+    /// Uses the pre-allocated scratch buffer to avoid per-dispatch heap allocation.
+    fn path_to_reuse(tree: &WidgetTree, target: WidgetId, out: &mut Vec<WidgetId>) {
+        out.clear();
         let mut cur = tree.get(target);
         while let Some(node) = cur {
-            path.push(node.id);
+            out.push(node.id);
             cur = node.parent.and_then(|p| tree.get(p));
         }
-        path.reverse(); // root → target
-        path
+        out.reverse(); // root → target
     }
 
     /// Dispatch `event` to `target`, running the capture phase (root → target),
@@ -175,18 +200,31 @@ impl EventDispatcher {
     /// Returns the merged [`Propagation`] of every handler that ran. Dispatch
     /// stops early as soon as a handler sets `stop_propagation`. Registry edits
     /// queued by handlers are applied only after this call returns.
+    ///
+    /// This method is **allocation-free on the hot path** after the first call:
+    /// it reuses pre-allocated scratch buffers for both the ancestor path and
+    /// the deferred-edit queue, so no heap allocation occurs during traversal.
     pub fn dispatch(
         &mut self,
         tree: &WidgetTree,
         target: WidgetId,
         event: DispatchEvent,
     ) -> Propagation {
-        let path = Self::path_to(tree, target);
+        // Fill the path into the pre-allocated scratch buffer — no allocation.
+        // We must extract the buffer temporarily to avoid a split-borrow conflict
+        // between `self.path_scratch` (mutated) and `self.handlers` (read below).
+        let mut path = std::mem::take(&mut self.path_scratch);
+        Self::path_to_reuse(tree, target, &mut path);
+
         if path.is_empty() {
+            self.path_scratch = path;
             return Propagation::CONTINUE;
         }
 
-        let mut pending: Vec<RegistryEdit> = Vec::new();
+        // Similarly extract the pending-edits buffer.
+        let mut pending = std::mem::take(&mut self.pending_scratch);
+        pending.clear();
+
         let mut result = Propagation::CONTINUE;
         let actual_target = path.last().copied().unwrap_or(target);
 
@@ -244,7 +282,14 @@ impl EventDispatcher {
             }
         }
 
-        self.apply_pending(pending);
+        self.apply_pending(&mut pending);
+
+        // Return the scratch buffers so the next call reuses the allocations.
+        // Clear pending (apply_pending already drained it) but keep capacity.
+        pending.clear();
+        self.pending_scratch = pending;
+        self.path_scratch = path;
+
         result
     }
 
@@ -267,8 +312,11 @@ impl EventDispatcher {
     }
 
     /// Apply deferred registry edits queued during dispatch.
-    fn apply_pending(&mut self, pending: Vec<RegistryEdit>) {
-        for edit in pending {
+    ///
+    /// Drains the edits from `pending` in-place so the buffer's capacity is
+    /// preserved for the next dispatch call.
+    fn apply_pending(&mut self, pending: &mut Vec<RegistryEdit>) {
+        for edit in pending.drain(..) {
             match edit {
                 RegistryEdit::Add { id, phase, handler } => match phase {
                     Phase::Capture => self.on_capture(id, handler),

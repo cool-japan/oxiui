@@ -37,6 +37,59 @@ impl Default for FocusRing {
     }
 }
 
+impl FocusRing {
+    /// Compute the bounding rectangle for the ring given the widget's bounding
+    /// box `(x, y, width, height)` in logical pixels.
+    ///
+    /// Returns `(rx, ry, rw, rh)` where the ring is outset by `self.offset` on
+    /// all sides and the stroke of `self.width` is applied further outward.
+    /// This is the rectangle that a renderer should stroke / outline.
+    ///
+    /// # Note for renderers
+    ///
+    /// The returned rectangle is the *outer* boundary of the ring stroke.
+    /// Renderers should stroke the rectangle inward by `self.width / 2.0` to
+    /// position the stroke centrally on the boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui_accessibility::FocusRing;
+    ///
+    /// let ring = FocusRing { width: 2.0, offset: 2.0, ..Default::default() };
+    /// let (rx, ry, rw, rh) = ring.ring_rect(10.0, 20.0, 100.0, 30.0);
+    /// // outset by offset (2) + half width (1) on each side
+    /// assert_eq!(rx, 10.0 - 2.0 - 1.0);
+    /// assert_eq!(ry, 20.0 - 2.0 - 1.0);
+    /// assert_eq!(rw, 100.0 + (2.0 + 1.0) * 2.0);
+    /// assert_eq!(rh, 30.0 + (2.0 + 1.0) * 2.0);
+    /// ```
+    pub fn ring_rect(&self, x: f32, y: f32, width: f32, height: f32) -> (f32, f32, f32, f32) {
+        let grow = self.offset + self.width / 2.0;
+        (x - grow, y - grow, width + grow * 2.0, height + grow * 2.0)
+    }
+
+    /// Returns `true` when the ring should be rendered (i.e. it has a non-zero
+    /// stroke width and a non-fully-transparent colour).
+    ///
+    /// Renderers may skip drawing the ring when this returns `false`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui_accessibility::FocusRing;
+    ///
+    /// let visible = FocusRing::default();
+    /// assert!(visible.is_visible());
+    ///
+    /// let invisible = FocusRing { color: [0, 0, 0, 0], ..Default::default() };
+    /// assert!(!invisible.is_visible());
+    /// ```
+    pub fn is_visible(&self) -> bool {
+        self.width > 0.0 && self.color[3] > 0
+    }
+}
+
 // ── Focus indicator ───────────────────────────────────────────────────────────
 
 /// Tracks which node currently holds focus and the visual ring spec to use.

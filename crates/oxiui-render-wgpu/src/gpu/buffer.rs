@@ -445,6 +445,206 @@ pub fn push_triangle(
     }
 }
 
+// ── TexVertex ─────────────────────────────────────────────────────────────────
+
+/// A single vertex fed to `textured.wgsl`.
+///
+/// 32 bytes = 2 (position) + 2 (uv) + 4 (tint) f32 values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexVertex {
+    /// Pixel-space quad-corner position (`@location(0)`).
+    pub position: [f32; 2],
+    /// Texture UV in `[0, 1]` (`@location(1)`).
+    pub uv: [f32; 2],
+    /// RGBA tint multiplier (`@location(2)`); normally `[1, 1, 1, 1]`.
+    pub tint: [f32; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<TexVertex>() == 32);
+
+// ── Textured quad emitters ────────────────────────────────────────────────────
+
+/// Parameters for a textured quad.
+pub struct TexQuadParams {
+    /// Quad x position (pixel space).
+    pub x: f32,
+    /// Quad y position (pixel space).
+    pub y: f32,
+    /// Quad width (pixel space).
+    pub w: f32,
+    /// Quad height (pixel space).
+    pub h: f32,
+    /// UV left edge.
+    pub u0: f32,
+    /// UV top edge.
+    pub v0: f32,
+    /// UV right edge.
+    pub u1: f32,
+    /// UV bottom edge.
+    pub v1: f32,
+    /// RGBA tint multiplier (component-wise; use `[1,1,1,1]` for no tint).
+    pub tint: [f32; 4],
+}
+
+/// Append six textured vertices (two triangles) for the given [`TexQuadParams`].
+///
+/// The UV rectangle `(u0, v0) → (u1, v1)` is mapped over the destination quad.
+/// `tint` is multiplied component-wise with the sampled texel in the shader.
+pub fn push_textured_quad(out: &mut Vec<TexVertex>, p: TexQuadParams) {
+    let TexQuadParams {
+        x,
+        y,
+        w,
+        h,
+        u0,
+        v0,
+        u1,
+        v1,
+        tint,
+    } = p;
+    let x1 = x + w;
+    let y1 = y + h;
+    // CCW winding: TL, BL, BR, TL, BR, TR
+    let corners = [
+        ([x, y], [u0, v0]),
+        ([x, y1], [u0, v1]),
+        ([x1, y1], [u1, v1]),
+        ([x, y], [u0, v0]),
+        ([x1, y1], [u1, v1]),
+        ([x1, y], [u1, v0]),
+    ];
+    for (pos, uv) in corners {
+        out.push(TexVertex {
+            position: pos,
+            uv,
+            tint,
+        });
+    }
+}
+
+/// Append the 9 quads for a nine-slice image.
+///
+/// `dest` is `[x, y, w, h]` in pixel space (the destination rectangle).
+/// `img_w`/`img_h` are the source image dimensions in pixels.
+/// `insets` is `[top, right, bottom, left]` in source pixels.
+///
+/// The nine regions are:
+///   TL corner | T edge   | TR corner
+///   L  edge   | Centre   | R  edge
+///   BL corner | B edge   | BR corner
+///
+/// Insets are clamped so `left+right <= img_w` and `top+bottom <= img_h`.
+/// Destination insets scale proportionally.  Any region with zero source or
+/// destination dimension is skipped.
+pub fn push_nine_slice_quads(
+    out: &mut Vec<TexVertex>,
+    dest: [f32; 4],
+    img_w: u32,
+    img_h: u32,
+    insets: [u32; 4],
+    tint: [f32; 4],
+) {
+    let [dst_x, dst_y, dst_w, dst_h] = dest;
+
+    // ── Clamp source insets so they don't overlap ─────────────────────────────
+    let iw = img_w as f32;
+    let ih = img_h as f32;
+
+    let raw_top = insets[0] as f32;
+    let raw_right = insets[1] as f32;
+    let raw_bottom = insets[2] as f32;
+    let raw_left = insets[3] as f32;
+
+    // Scale down if left+right > img_w or top+bottom > img_h
+    let lr_sum = raw_left + raw_right;
+    let tb_sum = raw_top + raw_bottom;
+    let (src_left, src_right) = if lr_sum > iw && lr_sum > 0.0 {
+        let scale = iw / lr_sum;
+        (raw_left * scale, raw_right * scale)
+    } else {
+        (raw_left, raw_right)
+    };
+    let (src_top, src_bottom) = if tb_sum > ih && tb_sum > 0.0 {
+        let scale = ih / tb_sum;
+        (raw_top * scale, raw_bottom * scale)
+    } else {
+        (raw_top, raw_bottom)
+    };
+
+    // ── Destination insets (pixel-space sizes matching corner regions) ─────────
+    // Scale destination corner sizes to match the source inset proportions,
+    // but clamp so they don't exceed the destination rect dimensions.
+    let dst_left = src_left.min(dst_w * 0.5);
+    let dst_right = src_right.min(dst_w - dst_left);
+    let dst_top = src_top.min(dst_h * 0.5);
+    let dst_bottom = src_bottom.min(dst_h - dst_top);
+
+    // ── Source UV breakpoints ─────────────────────────────────────────────────
+    let u0 = 0.0_f32;
+    let u1 = src_left / iw;
+    let u2 = (iw - src_right) / iw;
+    let u3 = 1.0_f32;
+
+    let v0 = 0.0_f32;
+    let v1 = src_top / ih;
+    let v2 = (ih - src_bottom) / ih;
+    let v3 = 1.0_f32;
+
+    // ── Destination pixel breakpoints ─────────────────────────────────────────
+    let dx0 = dst_x;
+    let dx1 = dst_x + dst_left;
+    let dx2 = dst_x + dst_w - dst_right;
+    let dx3 = dst_x + dst_w;
+
+    let dy0 = dst_y;
+    let dy1 = dst_y + dst_top;
+    let dy2 = dst_y + dst_h - dst_bottom;
+    let dy3 = dst_y + dst_h;
+
+    // ── Emit each of the 9 regions (row-major, skip degenerate) ──────────────
+    // Row 0: TL corner, T edge, TR corner
+    // Row 1: L edge,   Centre, R edge
+    // Row 2: BL corner, B edge, BR corner
+
+    let regions: [([f32; 4], [f32; 4]); 9] = [
+        // (dest [x,y,w,h], src_uv [u0,v0,u1,v1])
+        ([dx0, dy0, dx1 - dx0, dy1 - dy0], [u0, v0, u1, v1]), // TL
+        ([dx1, dy0, dx2 - dx1, dy1 - dy0], [u1, v0, u2, v1]), // T
+        ([dx2, dy0, dx3 - dx2, dy1 - dy0], [u2, v0, u3, v1]), // TR
+        ([dx0, dy1, dx1 - dx0, dy2 - dy1], [u0, v1, u1, v2]), // L
+        ([dx1, dy1, dx2 - dx1, dy2 - dy1], [u1, v1, u2, v2]), // Centre
+        ([dx2, dy1, dx3 - dx2, dy2 - dy1], [u2, v1, u3, v2]), // R
+        ([dx0, dy2, dx1 - dx0, dy3 - dy2], [u0, v2, u1, v3]), // BL
+        ([dx1, dy2, dx2 - dx1, dy3 - dy2], [u1, v2, u2, v3]), // B
+        ([dx2, dy2, dx3 - dx2, dy3 - dy2], [u2, v2, u3, v3]), // BR
+    ];
+
+    for ([rx, ry, rw, rh], [ru0, rv0, ru1, rv1]) in regions {
+        // Skip degenerate regions (zero destination or zero source UV span)
+        if rw <= 0.0 || rh <= 0.0 {
+            continue;
+        }
+        if (ru1 - ru0).abs() <= 0.0 || (rv1 - rv0).abs() <= 0.0 {
+            continue;
+        }
+        push_textured_quad(
+            out,
+            TexQuadParams {
+                x: rx,
+                y: ry,
+                w: rw,
+                h: rh,
+                u0: ru0,
+                v0: rv0,
+                u1: ru1,
+                v1: rv1,
+                tint,
+            },
+        );
+    }
+}
+
 /// Append six gradient vertices covering `(x, y, w, h)`.
 pub fn push_gradient_quad(out: &mut Vec<GradientVertex>, x: f32, y: f32, w: f32, h: f32) {
     let x1 = x + w;
@@ -456,6 +656,90 @@ pub fn push_gradient_quad(out: &mut Vec<GradientVertex>, x: f32, y: f32, w: f32,
             local: c,
         });
     }
+}
+
+// ── BlurUniforms ──────────────────────────────────────────────────────────────
+
+/// Uniform block for the separable Gaussian blur pass.
+///
+/// Matches the `BlurUniforms` struct in `blur.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlurUniforms {
+    /// Blur direction: `[1.0, 0.0]` for horizontal, `[0.0, 1.0]` for vertical.
+    pub direction: [f32; 2],
+    /// Per-texel step size: `[1.0/viewport_w, 1.0/viewport_h]`.
+    pub texel_size: [f32; 2],
+    /// Blur radius in pixels (0 = no blur, 1 tap each side).
+    pub radius: f32,
+    /// Gaussian sigma: `max(blur_radius, 1.0) / 2.0`.
+    pub sigma: f32,
+    /// Padding to 32 bytes.
+    pub _pad: [f32; 2],
+}
+
+const _: () = assert!(core::mem::size_of::<BlurUniforms>() == 32);
+
+// ── CompUniforms ──────────────────────────────────────────────────────────────
+
+/// Uniform block for the shadow composite pass.
+///
+/// Matches the `CompUniforms` struct in `composite.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CompUniforms {
+    /// Shadow tint colour in `[0, 1]` premultiplied RGBA.
+    pub tint: [f32; 4],
+    /// Per-texel step size: `[1.0/viewport_w, 1.0/viewport_h]`.
+    pub texel_size: [f32; 2],
+    /// Padding to 32 bytes.
+    pub _pad: [f32; 2],
+}
+
+const _: () = assert!(core::mem::size_of::<CompUniforms>() == 32);
+
+// ── Fullscreen quad emitter ───────────────────────────────────────────────────
+
+/// Push a fullscreen quad (covers `[0,0]` to `[w, h]`) as 6 [`GradientVertex`]
+/// vertices.
+///
+/// Used by the blur and composite passes which draw over the entire viewport.
+/// The `local` field carries pixel-space coordinates used as UV source in those
+/// shaders.
+pub fn push_fullscreen_quad(out: &mut Vec<GradientVertex>, w: f32, h: f32) {
+    // Corner definitions: (position, local) — both in pixel space.
+    let corners = [
+        ([0.0_f32, 0.0_f32], [0.0_f32, 0.0_f32]), // TL
+        ([w, 0.0], [w, 0.0]),                     // TR
+        ([0.0, h], [0.0, h]),                     // BL
+        ([w, h], [w, h]),                         // BR
+    ];
+    // Triangle 1: TL, TR, BL
+    out.push(GradientVertex {
+        position: corners[0].0,
+        local: corners[0].1,
+    });
+    out.push(GradientVertex {
+        position: corners[1].0,
+        local: corners[1].1,
+    });
+    out.push(GradientVertex {
+        position: corners[2].0,
+        local: corners[2].1,
+    });
+    // Triangle 2: TR, BR, BL
+    out.push(GradientVertex {
+        position: corners[1].0,
+        local: corners[1].1,
+    });
+    out.push(GradientVertex {
+        position: corners[3].0,
+        local: corners[3].1,
+    });
+    out.push(GradientVertex {
+        position: corners[2].0,
+        local: corners[2].1,
+    });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -618,5 +902,95 @@ mod tests {
         let lo = (bits & 0xffff) as u16;
         assert_eq!(hi, 42);
         assert_eq!(lo, 1000);
+    }
+
+    #[test]
+    fn tex_vertex_size_is_32_bytes() {
+        assert_eq!(core::mem::size_of::<TexVertex>(), 32);
+    }
+
+    #[test]
+    fn textured_quad_emits_six_vertices() {
+        let mut v = Vec::new();
+        push_textured_quad(
+            &mut v,
+            TexQuadParams {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 50.0,
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                tint: [1.0, 1.0, 1.0, 1.0],
+            },
+        );
+        assert_eq!(v.len(), 6);
+        // All vertices have the same tint
+        for vert in &v {
+            assert_eq!(vert.tint, [1.0, 1.0, 1.0, 1.0]);
+        }
+        // UV corners should span [0,0] to [1,1]
+        let us: Vec<f32> = v.iter().map(|vt| vt.uv[0]).collect();
+        assert!(us.contains(&0.0_f32));
+        assert!(us.contains(&1.0_f32));
+    }
+
+    #[test]
+    fn nine_slice_quads_emit_at_most_54_vertices() {
+        let mut v = Vec::new();
+        // 12x12 image, 4px insets on each side
+        push_nine_slice_quads(
+            &mut v,
+            [0.0, 0.0, 64.0, 64.0],
+            12,
+            12,
+            [4, 4, 4, 4],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        // 9 regions × 6 vertices = 54
+        assert_eq!(v.len(), 54);
+    }
+
+    #[test]
+    fn blur_uniforms_size_is_32_bytes() {
+        assert_eq!(core::mem::size_of::<BlurUniforms>(), 32);
+    }
+
+    #[test]
+    fn comp_uniforms_size_is_32_bytes() {
+        assert_eq!(core::mem::size_of::<CompUniforms>(), 32);
+    }
+
+    #[test]
+    fn fullscreen_quad_emits_six_vertices() {
+        let mut v = Vec::new();
+        push_fullscreen_quad(&mut v, 100.0, 200.0);
+        assert_eq!(v.len(), 6);
+        // Check corners cover 0..100 and 0..200
+        let xs: Vec<f32> = v.iter().map(|vt| vt.position[0]).collect();
+        let ys: Vec<f32> = v.iter().map(|vt| vt.position[1]).collect();
+        assert!(xs.contains(&0.0_f32));
+        assert!(xs.contains(&100.0_f32));
+        assert!(ys.contains(&0.0_f32));
+        assert!(ys.contains(&200.0_f32));
+    }
+
+    #[test]
+    fn nine_slice_degenerate_insets_skip_regions() {
+        let mut v = Vec::new();
+        // Zero insets → only centre region (6 verts), corner/edge regions are
+        // degenerate because src UV span is 0.
+        push_nine_slice_quads(
+            &mut v,
+            [0.0, 0.0, 64.0, 64.0],
+            12,
+            12,
+            [0, 0, 0, 0],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        // Only the centre should be non-degenerate: 6 vertices
+        assert_eq!(v.len(), 6);
     }
 }

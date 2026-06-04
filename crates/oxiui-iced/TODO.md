@@ -33,7 +33,7 @@ Working iced adapter (~235 SLOC across lib.rs, adapter.rs, theme.rs). Provides `
 - [x] Modal / overlay: layered container for dialog overlays using `iced::widget::stack` (~60 SLOC)
 - [x] Extended message types: `Message::TextChanged(usize, String)`, `Message::CheckboxToggled(usize, bool)`, `Message::SliderChanged(usize, f64)`, `Message::DropdownSelected(usize, usize)` -- generalized message enum for all widget interactions (~80 SLOC)
 - [x] State management: `IcedUiCtx` should track per-widget state across frames (text input values, checkbox states, slider positions) via `HashMap<usize, WidgetState>` (~100 SLOC)
-- [ ] IME support: monitor iced upstream for IME API exposure; implement `forward_ime_event()` properly when iced adds `TextInput::ime_preedit`/`ime_commit` API (~60 SLOC when available)
+- [ ] IME support: monitor iced upstream for IME API exposure; implement `forward_ime_event()` properly when iced adds `TextInput::ime_preedit`/`ime_commit` API (~60 SLOC when available) **BLOCKED: upstream iced 0.14 has no public IME injection API (`ime_preedit`/`ime_commit` not exposed on `text_input`); revisit when iced exposes IME hooks**
 - [x] Theme mapping expansion: `palette_to_iced_theme()` — added `text_input_style_from_palette`, `scrollable_style_from_palette` (+ `*_from_theme` variants) in `theme.rs`; border.color set from palette.primary; scroller background from palette.primary; rail background from palette.surface (2026-05-29)
 - [x] Custom iced widget: `OxiIcedWidget` implementing `iced::advanced::Widget` (~150 SLOC) — `pub struct OxiIcedWidget{spec,width,height}` implementing `Widget<Msg,Theme,Renderer>`; `oxi_widget(spec)` ctor; `size()`, `layout()`, `draw()` (stub) implemented; requires iced `features=["advanced"]` (2026-05-29)
     - **Deviation:** `draw()` is a no-op stub — delegating draw to a materialized Element requires concrete Theme/Renderer + Tree plumbing beyond this slice
@@ -87,12 +87,18 @@ Working iced adapter (~235 SLOC across lib.rs, adapter.rs, theme.rs). Provides `
   - **Risk:** Mitigated — all existing 87 tests pass, 0 clippy warnings.
 
 ## Integration
-- [ ] `oxiui-core` integration: implement expanded `UiCtx` methods as they are added to the trait
-- [ ] `oxiui-text` integration: use `TextPipeline` for consistent text rendering when iced exposes custom text layout hooks
+- [x] `oxiui-core` integration: implement expanded `UiCtx` methods as they are added to the trait (2026-06-03)
+    - **Implemented:** `text_area()` → `WidgetSpec::TextArea { id, value, min_rows }`, `Message::TextAreaChanged`, `WidgetState::TextArea`. Materialises as a vertical stack of `text_input` widgets (best-effort; iced 0.14's `text_editor` requires `Content<Renderer>` which cannot be stored in a `'static` spec). `IcedNullCtx::text_area()` records the call. 8 tests in `tests/widgets.rs` cover state round-trip, cursor_pos approximation, materialisation, and NullCtx recording.
+    - **Deviation:** `text_area` is rendered as stacked `text_input` widgets; true multi-line `text_editor` is deferred until iced exposes a simpler API.
+- [ ] `oxiui-text` integration: use `TextPipeline` for consistent text rendering when iced exposes custom text layout hooks (BLOCKED: upstream iced 0.14 has no custom text layout hook API)
 - [x] `oxiui-theme` integration: consume `DesignTokens` for spacing, border-radius, shadow in iced widget styles — `DesignTokensAdapter::from_tokens(&DesignTokens, &TypographyScale)` exposes tokens as iced primitives (body_text_size, headline_text_size, standard_padding, border_radius); `palette_and_tokens_to_iced_theme` convenience wrapper added. Deviation: iced 0.14 Theme::Custom holds only colours — tokens cannot be embedded globally; per-widget wiring is a follow-up. (2026-05-29)
-- [ ] `oxiui-table` integration: `render_iced()` already works; expand with column sorting, selection, and scroll-offset tracking via `scrollable::Id`
-- [ ] `oxiui-accessibility` integration: iced has built-in AccessKit support (iced 0.14); bridge OxiUI's `A11yTree` to avoid duplicate a11y trees
-- [ ] COOLJAPAN ecosystem: iced is Pure Rust; no additional C/C++ dependencies; monitor iced releases for IME API additions
+- [x] `oxiui-table` integration: `render_iced()` already works; expanded with column sorting, selection, and scroll-offset tracking via `scrollable::Id` (2026-06-03)
+    - **Added:** `render_iced_sortable()` — clickable column headers emitting `on_sort_toggle(col_idx)` messages + optional `scrollable_id: Option<iced::widget::Id>` for scroll-event tracking. `render_iced_with_selection()` — row highlighting for selected rows via `SelectionModel`; selected rows wrapped in a highlighted `button` container; optional `scrollable_id`. Both functions exported from `oxiui-table::lib.rs` behind the `iced-table` feature.
+    - **Deviation:** iced 0.14 has no way to auto-derive `scroll_offset` from the widget event stream without `scroll_to` subscriptions; `scroll_offset` remains caller-tracked.
+- [x] `oxiui-accessibility` integration: bridge OxiUI's `WidgetSpec` tree to `accesskit::TreeUpdate` via `oxiui-accessibility` infrastructure (2026-06-03)
+    - **Design:** `src/a11y_bridge.rs` (feature-gated behind `a11y` feature). `spec_to_a11y_tree(&[WidgetSpec], &IcedA11yConfig) -> accesskit::TreeUpdate` — converts a spec tree under a synthetic root `Window` node. `spec_to_a11y_node(WidgetSpec, &mut u64) -> Option<A11yNode>` for per-spec conversion (depth-first counter). `IcedA11yConfig { root_label, id_start }` with builder methods. Decorative specs (Separator, Spacer) are omitted. 15 tests in `tests/a11y_bridge_tests.rs`.
+    - **Deviation:** iced 0.14 has no built-in AccessKit support; the bridge operates on `WidgetSpec` (before iced rendering) rather than through iced internals.
+- [x] COOLJAPAN ecosystem: iced is Pure Rust; no additional C/C++ dependencies confirmed; IME API absent in iced 0.14 (monitored) (2026-06-03)
 
 ## Proposed follow-ups
 - **True modal/popup overlay:** lift overlay specs to root stack![base,overlay] in the facade view() — needs facade cooperation.

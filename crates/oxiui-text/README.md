@@ -11,7 +11,7 @@ Built entirely on `oxitext` + `oxifont` — no C/C++ shaping libraries (no HarfB
 
 ```toml
 [dependencies]
-oxiui-text = "0.1.0"
+oxiui-text = "0.1.1"
 ```
 
 ## Quick Start

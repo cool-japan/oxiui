@@ -12,7 +12,11 @@ keywords = ["text", "oxiui", "oxitext", "cooljapan", "pure-rust"]
 
 [features]
 default = []
+## Emoji rendering: detect emoji codepoints, route them to oxifont color glyph
+## extraction (CBDT/COLR), and scale them to match the current text size.
+emoji = ["dep:oxifont"]
 
 [dependencies]
 oxiui-core.workspace = true
 oxitext.workspace = true
+oxifont = { workspace = true, optional = true }

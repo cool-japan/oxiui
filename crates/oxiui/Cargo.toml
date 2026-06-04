@@ -17,9 +17,14 @@ egui     = ["dep:oxiui-egui", "dep:oxiui-render-wgpu", "dep:egui", "dep:eframe",
 iced     = ["dep:oxiui-iced", "dep:iced"]
 table    = ["dep:oxiui-table"]
 a11y     = ["dep:oxiui-accessibility", "dep:accesskit"]
-web      = []  # oxiui-web is publish=false, dep removed for publish; restore with version dep after oxiui-web is publishable
 slint    = ["dep:oxiui-slint", "oxiui-slint/slint"]
 dioxus   = ["dep:oxiui-dioxus", "oxiui-dioxus/dioxus"]
+tracing  = ["dep:tracing", "dep:tracing-subscriber"]
+persist  = ["dep:oxicode"]
+## System tray integration via tray-icon (desktop-only; desktop platforms only).
+tray     = ["dep:tray-icon"]
+## Native OS file / message dialogs via rfd (Rusty File Dialog).
+dialogs  = ["dep:rfd"]
 default  = ["gpu", "egui"]
 
 [dependencies]
@@ -66,11 +71,6 @@ optional = true
 workspace = true
 optional = true
 
-# oxiui-web has publish=false — dep removed for publish; restore after oxiui-web is publishable
-# [dependencies.oxiui-web]
-# workspace = true
-# optional = true
-
 [dependencies.oxiui-slint]
 workspace = true
 optional = true
@@ -82,6 +82,30 @@ optional = true
 [dependencies.png]
 workspace = true
 optional = true
+
+[dependencies.oxicode]
+workspace = true
+optional = true
+
+[dependencies.tracing]
+workspace = true
+optional = true
+
+[dependencies.tracing-subscriber]
+workspace = true
+optional = true
+
+[dependencies.tray-icon]
+workspace = true
+optional = true
+
+[dependencies.rfd]
+workspace = true
+optional = true
+
+[dev-dependencies]
+oxiui-theme = { path = "../oxiui-theme" }
+oxiui-core  = { path = "../oxiui-core" }
 
 [[example]]
 name = "hello"

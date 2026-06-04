@@ -1,6 +1,8 @@
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 //! wgpu GPU render surface — CPU-side preparation engine for OxiUI.
+// `surface` requires one `unsafe` block to call wgpu's `create_surface_unsafe`.
+// All other modules remain fully safe — `forbid(unsafe_code)` is lifted only
+// for the crate root and re-applied per module via `#[deny(unsafe_code)]`.
+#![warn(missing_docs)]
 //!
 //! This crate provides the full CPU-side rendering preparation stack that a
 //! future GPU [`RenderBackend`] implementation will compose:
@@ -28,6 +30,8 @@
 //! [`UiError`]: oxiui_core::UiError
 //! [`UiError::Unsupported`]: oxiui_core::UiError::Unsupported
 
+#[cfg(feature = "accessibility")]
+pub mod a11y_bridge;
 pub mod atlas;
 pub mod batch;
 pub mod clip;
@@ -35,6 +39,17 @@ pub mod error;
 pub mod gpu;
 pub mod quality;
 pub mod resource;
+/// SDF text rendering pipeline (requires `text` feature).
+///
+/// Provides [`sdf_text::SdfTextPipeline`] which uploads [`oxitext_sdf::SdfTile`]
+/// glyph SDFs to a GPU texture atlas and renders them via a WGSL SDF shader.
+#[cfg(feature = "text")]
+pub mod sdf_text;
+pub mod surface;
+#[cfg(feature = "text")]
+pub mod text_bridge;
+#[cfg(feature = "theme")]
+pub mod theme_bridge;
 
 // ── Convenience re-exports ────────────────────────────────────────────────────
 
@@ -42,11 +57,21 @@ pub use atlas::{AtlasHandle, AtlasRect, TextureAtlas};
 pub use batch::{BatchKey, BlendMode, DrawBatch, PipelineKind, PreparedFrame};
 pub use clip::{ClipRect, ClipStack};
 pub use error::{map_gpu_error, GpuErrorKind};
-pub use gpu::{GpuContext, SolidPipeline, WgpuBackend};
+pub use gpu::{
+    blend_state_for_mode, select_surface_format, BlendPipelineSet, BlurPipeline, CompositePipeline,
+    ComputeBlurPipeline, FrameHistogram, FrameStats, FrameTimer, FrameTimerMode, GpuContext,
+    HdrGpuContext, InstanceRect, InstancedRectPipeline, InstancedRectRenderer, LayerCache,
+    PresentModeRecommendation, RenderTarget, RingAllocation, RingBuffer, RingBufferStats,
+    SolidPipeline, StencilClipState, StencilTarget, StencilWritePipeline, SurfaceColorFormat,
+    WgpuBackend, DEPTH_STENCIL_FORMAT, HDR_FORMAT,
+};
 pub use quality::{RenderQuality, ShadowQuality, TextQuality};
 pub use resource::{
     ResourceId, ResourceRegistry, ShaderGuard, ShaderHandle, TextureGuard, TextureHandle,
 };
+#[cfg(feature = "text")]
+pub use sdf_text::{AtlasEntry, SdfTextConfig, SdfTextPipeline, SdfVertex};
+pub use surface::{SurfaceConfig, SurfaceContext};
 
 // ── WgpuPrep ─────────────────────────────────────────────────────────────────
 

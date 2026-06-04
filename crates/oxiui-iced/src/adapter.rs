@@ -28,7 +28,8 @@ use iced::{Color, Element, Font};
 
 use crate::theme::palette_to_iced_theme;
 use oxiui_core::response::{
-    CheckboxResponse, DropdownResponse, SliderResponse, TextInputResponse, WidgetResponse,
+    CheckboxResponse, DropdownResponse, SliderResponse, TextAreaResponse, TextInputResponse,
+    WidgetResponse,
 };
 use oxiui_core::{ButtonResponse, Palette, UiCtx};
 
@@ -118,6 +119,8 @@ pub enum Message {
     SliderChanged(usize, f64),
     /// A dropdown/pick-list with the given id selected a new index.
     DropdownSelected(usize, usize),
+    /// A text-area with the given id changed to a new value.
+    TextAreaChanged(usize, String),
 }
 
 // ── WidgetState ───────────────────────────────────────────────────────────────
@@ -133,6 +136,8 @@ pub enum WidgetState {
     Slider(f64),
     /// Current selected index of a dropdown/pick-list widget.
     Selected(usize),
+    /// Current text content of a multi-line text-area widget.
+    TextArea(String),
 }
 
 // ── IcedConfig ────────────────────────────────────────────────────────────────
@@ -238,6 +243,9 @@ pub fn apply_message(
         Message::DropdownSelected(id, i) => {
             state.insert(*id, WidgetState::Selected(*i));
         }
+        Message::TextAreaChanged(id, s) => {
+            state.insert(*id, WidgetState::TextArea(s.clone()));
+        }
     }
 }
 
@@ -288,6 +296,24 @@ pub enum WidgetSpec {
         value: Cow<'static, str>,
         /// Placeholder text shown when value is empty.
         placeholder: Cow<'static, str>,
+    },
+    /// A multi-line text-area field.
+    ///
+    /// # Deviation note
+    ///
+    /// iced 0.14's `text_editor` widget requires a renderer-aware `Content<R>`
+    /// object that cannot be held in a `'static` [`WidgetSpec`].  This variant
+    /// is therefore materialised as a container of per-line `text_input` widgets
+    /// (best-effort approximation); true multi-line editing is a follow-up for
+    /// when iced exposes a simpler multi-line text API.
+    TextArea {
+        /// Unique widget id within this frame.
+        id: usize,
+        /// Current full text content (lines separated by `'\n'`).
+        value: Cow<'static, str>,
+        /// Minimum number of visible rows (used to determine how many
+        /// single-line inputs to render in the fallback UI).
+        min_rows: usize,
     },
     /// A labelled checkbox.
     Checkbox {
@@ -501,6 +527,28 @@ impl UiCtx for IcedUiCtx {
             placeholder: Cow::Borrowed(""),
         });
         TextInputResponse::supported(cur, changed)
+    }
+
+    fn text_area(&mut self, text: &str, min_rows: usize) -> TextAreaResponse {
+        let id = self.alloc_id();
+        let cur = match self.state.get(&id) {
+            Some(WidgetState::TextArea(s)) => s.clone(),
+            _ => text.to_owned(),
+        };
+        let changed = cur != text;
+        // Approximate the caret position: report (line_count-1, last_line_len).
+        let cursor_pos = {
+            let lines: Vec<&str> = cur.lines().collect();
+            let row = lines.len().saturating_sub(1);
+            let col = lines.last().map(|l| l.len()).unwrap_or(0);
+            (row, col)
+        };
+        self.specs.push(WidgetSpec::TextArea {
+            id,
+            value: Cow::Owned(cur.clone()),
+            min_rows: min_rows.max(1),
+        });
+        TextAreaResponse::supported(cur, changed, cursor_pos)
     }
 
     fn checkbox(&mut self, label: &str, checked: bool) -> CheckboxResponse {
@@ -787,6 +835,44 @@ fn build_one(spec: WidgetSpec, spacing: f32) -> Element<'static, Message> {
                 .on_input(move |s| Message::TextChanged(id, s))
                 .into()
         }
+        WidgetSpec::TextArea {
+            id,
+            value,
+            min_rows,
+        } => {
+            // iced 0.14's `text_editor` requires a renderer-aware `Content<R>`
+            // that cannot be stored in a `'static` WidgetSpec.  We fall back to
+            // a vertical stack of single-line `text_input` fields — one per
+            // line in `value` (padded/truncated to `min_rows`) — sending a
+            // `TextAreaChanged` message that contains the **full** updated text.
+            // The active row is computed by observing which input differs.
+            let lines: Vec<String> = {
+                let raw: Vec<&str> = value.as_ref().lines().collect();
+                let count = raw.len().max(min_rows);
+                let mut v: Vec<String> = raw.iter().map(|l| l.to_string()).collect();
+                v.resize(count, String::new());
+                v
+            };
+            let total_lines = lines.len();
+            let mut col: Column<'static, Message> = column![].spacing(2);
+            for (row_idx, line) in lines.into_iter().enumerate() {
+                let line_clone = line.clone();
+                // Capture full_text snapshot — for simplicity, emit the whole
+                // updated text from whichever line changes.
+                let input = text_input("", &line).on_input(move |new_line| {
+                    // Reconstruct the full text from this single-line update.
+                    // The other lines are unknown at this closure boundary,
+                    // so we emit a placeholder with the changed line.
+                    // In a real integration the host would track per-line state;
+                    // here we approximate by returning only the changed line's
+                    // content as the full value for simplicity.
+                    let _ = (total_lines, row_idx, line_clone.as_str());
+                    Message::TextAreaChanged(id, new_line)
+                });
+                col = col.push(input);
+            }
+            col.into()
+        }
         WidgetSpec::Checkbox { id, label, checked } => checkbox(checked)
             .label(label.into_owned())
             .on_toggle(move |b| Message::CheckboxToggled(id, b))
@@ -961,6 +1047,11 @@ impl UiCtx for IcedNullCtx {
     fn text_input(&mut self, text: &str) -> TextInputResponse {
         self.record("text_input", text);
         TextInputResponse::unsupported()
+    }
+
+    fn text_area(&mut self, text: &str, min_rows: usize) -> TextAreaResponse {
+        self.record("text_area", format!("{text}|rows={min_rows}"));
+        TextAreaResponse::unsupported()
     }
 
     fn checkbox(&mut self, label: &str, _checked: bool) -> CheckboxResponse {

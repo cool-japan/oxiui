@@ -25,6 +25,7 @@ pub mod lazy_palette;
 pub mod manager;
 pub mod overlay;
 pub mod palette_ext;
+pub mod serial;
 pub mod spec;
 pub mod style_cache;
 pub mod stylesheet;
@@ -49,6 +50,7 @@ pub use lazy_palette::LazyPaletteVariants;
 pub use manager::{ThemeListener, ThemeManager};
 pub use overlay::{overlay, PartialTheme};
 pub use palette_ext::ExtendedPalette;
+pub use serial::{deserialize_theme, serialize_theme, ThemeSnapshot};
 pub use spec::{
     elevation_shadow, elevation_shadows, elevation_to_shadow, BorderSpec, BorderSpecs, BorderStyle,
     ShadowSpec,

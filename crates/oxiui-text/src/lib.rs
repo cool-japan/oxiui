@@ -10,6 +10,12 @@ pub mod atlas;
 pub mod cache;
 pub mod decoration;
 pub mod editor;
+/// Emoji rendering support (requires `emoji` feature).
+///
+/// Provides [`emoji::EmojiSegmenter`], [`emoji::is_emoji_codepoint`], and
+/// [`emoji::EmojiRenderer`] for mixed-text emoji rendering.
+#[cfg(feature = "emoji")]
+pub mod emoji;
 pub mod fallback;
 pub mod highlight;
 pub mod hyperlink;

@@ -4,7 +4,7 @@
 //! reference semantic steps (`spacing.md`) rather than magic numbers.
 
 /// A named step within the spacing scale.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, oxicode::Encode, oxicode::Decode)]
 pub enum SpacingStep {
     /// Extra-small spacing (tightest).
     Xs,
@@ -23,7 +23,7 @@ pub enum SpacingStep {
 }
 
 /// A named step within the border-radius scale.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, oxicode::Encode, oxicode::Decode)]
 pub enum RadiusStep {
     /// No rounding (sharp corners).
     None,
@@ -42,7 +42,7 @@ pub enum RadiusStep {
 /// The full set of design tokens for a theme.
 ///
 /// Arrays are indexed by their corresponding step enum's discriminant order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub struct DesignTokens {
     /// Spacing scale in logical pixels (7 steps, `Xs`..`Xxxl`).
     pub spacing: [f32; 7],

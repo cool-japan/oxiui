@@ -11,7 +11,7 @@ Both egui and eframe are **Pure Rust** GUI frameworks, so this adapter keeps the
 
 ```toml
 [dependencies]
-oxiui-egui = "0.1.0"
+oxiui-egui = "0.1.1"
 ```
 
 ## Quick Start

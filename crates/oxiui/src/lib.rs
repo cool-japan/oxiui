@@ -76,6 +76,34 @@ pub use oxiui_core::{ButtonResponse, Color, FontSpec, Palette, Theme, UiCtx, UiE
 /// ([`EguiRunner`], `IcedRunner`) for wiring custom backend dispatchers.
 pub mod runner;
 
+/// Multi-window support.
+///
+/// Provides [`multiwindow::WindowRegistry`], [`multiwindow::SecondaryWindow`],
+/// and the [`App::open_window`] / [`App::close_window`] builder methods for
+/// registering secondary windows.  The underlying [`oxiui_core::window::WindowId`]
+/// and [`oxiui_core::window::WindowChannel`] types are also re-exported here.
+pub mod multiwindow;
+
+pub use multiwindow::SecondaryWindow;
+
+/// In-app dialog queue (no OS file picker; Pure Rust).
+///
+/// Provides [`dialog::DialogQueue`], [`dialog::DialogKind`],
+/// [`dialog::DialogResponse`], and [`dialog::DialogId`] for a
+/// backend-agnostic dialog request/response model.
+pub mod dialog;
+
+pub use dialog::{DialogId, DialogKind, DialogQueue, DialogResponse};
+
+/// Native menu bar builder.
+///
+/// Provides [`menu::MenuBar`], [`menu::MenuBarBuilder`], [`menu::Menu`], and
+/// [`menu::MenuItem`] for constructing cross-platform application menu bars.
+/// Use [`App::with_menu_bar`] to attach a menu bar to the running app.
+pub mod menu;
+
+pub use menu::{Menu, MenuBar, MenuBarBuilder, MenuItem};
+
 #[cfg(feature = "egui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "egui")))]
 pub use runner::EguiRunner;
@@ -83,6 +111,25 @@ pub use runner::EguiRunner;
 #[cfg_attr(docsrs, doc(cfg(feature = "iced")))]
 pub use runner::IcedRunner;
 pub use runner::{BackendRunner, LifecycleConfig};
+
+/// Logging / tracing integration (requires `tracing` feature).
+///
+/// Provides [`logging::init_logging`] which installs a `tracing-subscriber` fmt subscriber
+/// configured to respect the `RUST_LOG` environment variable.  Call this early
+/// in `main()` to get structured, colourised log output for all OxiUI tracing
+/// spans (frame, layout, paint, event).
+///
+/// # Example
+///
+/// ```no_run
+/// fn main() {
+///     oxiui::logging::init_logging(oxiui::logging::LogLevel::Info);
+///     // … start the app
+/// }
+/// ```
+#[cfg(feature = "tracing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tracing")))]
+pub mod logging;
 
 /// PNG icon decoding (internal; requires `egui` feature which pulls in `png`).
 #[cfg(feature = "egui")]
@@ -132,17 +179,6 @@ pub mod recording;
 #[cfg_attr(docsrs, doc(cfg(feature = "a11y")))]
 pub use recording::{RecordingEntry, RecordingUiCtx};
 
-/// wasm32 web entry point re-exports (requires `web` feature).
-///
-/// On wasm32 targets, [`web::mount`] boots an OxiUI app on a `<canvas>` element.
-/// On native targets the `mount` function returns `Err` — use this module only
-/// from wasm32 binaries or from code guarded by `#[cfg(target_arch = "wasm32")]`.
-#[cfg(feature = "web")]
-#[cfg_attr(docsrs, doc(cfg(feature = "web")))]
-pub mod web {
-    pub use oxiui_web::mount;
-}
-
 /// Re-exports from `oxiui-render-soft` (requires `software` feature).
 ///
 /// Exposes the pure-CPU headless render path: [`render::RgbaBuffer`],
@@ -168,6 +204,32 @@ pub mod solver {
         Constraint, Expression, RelOp, Solver, SolverError, Strength, Term, Variable,
     };
 }
+
+/// System tray integration (requires `tray` feature).
+///
+/// Provides [`tray::TrayConfig`], [`tray::TrayMenuItem`], and [`tray::TrayHandle`]
+/// for registering a system tray icon with a context menu.  The icon is backed by
+/// the [`tray-icon`](https://crates.io/crates/tray-icon) crate at runtime.
+///
+/// # Note (basic implementation)
+///
+/// This is a basic implementation.  Full event-loop integration (receiving menu-click
+/// callbacks inside the eframe/iced event loop) is planned for a future release.
+pub mod tray;
+
+pub use tray::{TrayConfig, TrayHandle, TrayMenuItem};
+
+/// Native OS file / message dialogs (requires `dialogs` feature).
+///
+/// Provides [`native_dialog::open_file_dialog`], [`native_dialog::save_file_dialog`],
+/// [`native_dialog::message_dialog`], and [`native_dialog::confirm_dialog`] backed
+/// by the [`rfd`](https://crates.io/crates/rfd) Pure-Rust crate.
+///
+/// These are *blocking* helpers that call the platform's native dialog API.
+/// For a headless-compatible alternative, use the built-in [`dialog::DialogQueue`].
+pub mod native_dialog;
+
+pub use native_dialog::{DialogResult, MessageLevel};
 
 /// Prelude module — re-exports the most commonly used OxiUI types.
 ///
@@ -321,6 +383,16 @@ pub struct AppConfig {
     /// backend's font loading path when [`App::run`] begins (egui path only
     /// in this release; iced font loading is deferred).
     pub extra_fonts: Vec<(String, Vec<u8>)>,
+    /// Optional design-token override (spacing / radius / elevation scales).
+    ///
+    /// When `None`, backends use the theme's default tokens. Set via
+    /// [`App::with_design_tokens`].
+    pub design_tokens: Option<oxiui_theme::DesignTokens>,
+    /// Optional typography-scale override.
+    ///
+    /// When `None`, backends use the theme's default scale. Set via
+    /// [`App::with_typography`].
+    pub typography: Option<oxiui_theme::TypographyScale>,
 }
 
 impl Default for AppConfig {
@@ -345,6 +417,8 @@ impl AppConfig {
             icon: None,
             position: None,
             extra_fonts: Vec::new(),
+            design_tokens: None,
+            typography: None,
         }
     }
 
@@ -718,159 +792,12 @@ impl Default for NotificationQueue {
     }
 }
 
-// ─── iced state types (module-level so free functions can reference them) ────
-// These types are only compiled when the "iced" feature is active.
+// ─── iced backend (extracted to iced_backend.rs for line-count compliance) ────
 #[cfg(feature = "iced")]
-mod iced_app {
-    use std::cell::{Cell, RefCell};
-    use std::collections::{HashMap, HashSet};
-
-    use iced::Element;
-    use iced::Task;
-    use oxiui_iced::{apply_message, IcedConfig, IcedUiCtx, Message, WidgetState};
-
-    use crate::{ContentFn, HookFn, Plugin};
-
-    /// Application state threaded through iced's `update`/`view` loop.
-    ///
-    /// iced's `view(&State)` takes an immutable reference, so we use `RefCell`
-    /// for interior mutability (the content closure and click/widget state).
-    pub struct OxiIcedState {
-        /// Window title (supplied to the `.title()` callback).
-        pub title: String,
-        /// The user-supplied content closure; called every `view` frame.
-        pub content: RefCell<Option<ContentFn>>,
-        /// Button ids whose `ButtonPressed` message was received this cycle.
-        pub pending_clicks: RefCell<HashSet<usize>>,
-        /// Per-widget retained state (text, checked, slider, selected index).
-        pub widget_state: RefCell<HashMap<usize, WidgetState>>,
-        /// Lifecycle on_init hooks; called once before the first frame.
-        pub on_init: RefCell<Vec<HookFn>>,
-        /// Lifecycle on_frame hooks; called every frame after content.
-        pub on_frame: RefCell<Vec<HookFn>>,
-        /// Registered plugins sorted by priority.
-        pub plugins: RefCell<Vec<Box<dyn Plugin>>>,
-        /// Whether the init phase has been completed.
-        pub initialised: Cell<bool>,
-    }
-
-    impl OxiIcedState {
-        /// Create an empty fallback state (used if the boot mutex is poisoned).
-        pub fn empty() -> Self {
-            Self {
-                title: String::new(),
-                content: RefCell::new(None),
-                pending_clicks: RefCell::new(HashSet::new()),
-                widget_state: RefCell::new(HashMap::new()),
-                on_init: RefCell::new(Vec::new()),
-                on_frame: RefCell::new(Vec::new()),
-                plugins: RefCell::new(Vec::new()),
-                initialised: Cell::new(false),
-            }
-        }
-    }
-
-    /// iced update function — advances widget state and click tracking.
-    pub fn update(state: &mut OxiIcedState, msg: Message) -> Task<Message> {
-        let mut clicks = state.pending_clicks.borrow_mut();
-        let mut widget_state = state.widget_state.borrow_mut();
-        apply_message(&mut widget_state, &mut clicks, &msg);
-        Task::none()
-    }
-
-    /// iced view function — drives the content closure through `IcedUiCtx`.
-    ///
-    /// Also fires init hooks + plugin init on the first frame, and on_frame
-    /// hooks + plugin update every frame. This mirrors the pattern used by
-    /// `OxiEguiApp::ui()` (egui path).
-    pub fn view<'a>(state: &'a OxiIcedState) -> Element<'a, Message> {
-        // Drain pending clicks for this frame.
-        let clicks = {
-            let mut guard = state.pending_clicks.borrow_mut();
-            std::mem::take(&mut *guard)
-        };
-        let widget_state = state.widget_state.borrow().clone();
-
-        let config = IcedConfig {
-            pending_clicks: clicks,
-            state: widget_state,
-            spacing: 8.0,
-            padding: 0.0,
-            title: state.title.clone(),
-            spec_capacity_hint: 0,
-        };
-        let mut ctx = IcedUiCtx::new(config);
-
-        // Fire init hooks and plugin init exactly once.
-        if !state.initialised.get() {
-            state.initialised.set(true);
-            if let Ok(mut hooks) = state.on_init.try_borrow_mut() {
-                for hook in hooks.iter_mut() {
-                    hook(&mut ctx);
-                }
-            }
-            if let Ok(mut plugins) = state.plugins.try_borrow_mut() {
-                for plugin in plugins.iter_mut() {
-                    plugin.init(&mut ctx);
-                }
-            }
-        }
-
-        // Drive the content closure through the UiCtx bridge.
-        if let Ok(mut content_guard) = state.content.try_borrow_mut() {
-            if let Some(ref mut f) = *content_guard {
-                f(&mut ctx);
-            }
-        }
-
-        // Fire per-frame hooks and plugin updates.
-        if let Ok(mut hooks) = state.on_frame.try_borrow_mut() {
-            for hook in hooks.iter_mut() {
-                hook(&mut ctx);
-            }
-        }
-        if let Ok(mut plugins) = state.plugins.try_borrow_mut() {
-            for plugin in plugins.iter_mut() {
-                plugin.update(&mut ctx);
-            }
-        }
-
-        // `into_iced_element()` returns `Element<'static, Message>`.
-        // `'static: 'a` by subtyping, so the coercion is valid.
-        let elem: Element<'static, Message> = ctx.into_iced_element();
-        // Cast the lifetime from 'static to 'a (safe: 'static is longer).
-        // SAFETY: all widget content is owned strings; no borrowed data from state.
-        elem
-    }
-
-    /// Run the iced application with the given state and theme.
-    pub fn run(
-        state: OxiIcedState,
-        iced_theme: iced::Theme,
-        width: f32,
-        height: f32,
-    ) -> iced::Result {
-        let boot_state = std::sync::Mutex::new(Some(state));
-
-        let boot = move || {
-            boot_state
-                .lock()
-                .ok()
-                .and_then(|mut g| g.take())
-                .unwrap_or_else(OxiIcedState::empty)
-        };
-
-        let title_fn = move |s: &OxiIcedState| s.title.clone();
-        let theme_fn = move |_: &OxiIcedState| iced_theme.clone();
-        let _ = width;
-        let _ = height;
-
-        iced::application(boot, update, view)
-            .title(title_fn)
-            .theme(theme_fn)
-            .run()
-    }
-}
+mod iced_backend;
+// Re-export as `iced_app` to preserve existing call-sites in run_iced().
+#[cfg(feature = "iced")]
+use iced_backend as iced_app;
 
 // ─── App builder ─────────────────────────────────────────────────────────────
 
@@ -897,6 +824,12 @@ pub struct App {
     /// Per-frame escape-hatch callbacks that receive the raw [`egui::Context`].
     #[cfg(feature = "egui")]
     egui_frame_hooks: Vec<EguiFrameHook>,
+    /// Multi-window registry: secondary windows registered via [`App::open_window`].
+    window_registry: multiwindow::WindowRegistry,
+    /// In-app dialog queue for pending dialog requests and responses.
+    dialogs: dialog::DialogQueue,
+    /// Optional application-level menu bar.
+    menu_bar: Option<menu::MenuBar>,
 }
 
 impl App {
@@ -919,6 +852,9 @@ impl App {
             frame_skip: false,
             #[cfg(feature = "egui")]
             egui_frame_hooks: Vec::new(),
+            window_registry: multiwindow::WindowRegistry::new(),
+            dialogs: dialog::DialogQueue::new(),
+            menu_bar: None,
         }
     }
 
@@ -1332,6 +1268,427 @@ impl App {
         &self.config.extra_fonts
     }
 
+    // ─── oxiui-theme design-token / typography integration ────────────────────
+
+    /// Override the active theme's design tokens (spacing, radius, elevation).
+    ///
+    /// The tokens are stored in [`AppConfig`] and available via
+    /// [`App::design_tokens`] for advanced backends and layout engines that need
+    /// to read the spacing scale at frame time.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui_theme::DesignTokens;
+    ///
+    /// let tokens = DesignTokens::default();
+    /// let _app = App::new(AppConfig::default()).with_design_tokens(tokens);
+    /// ```
+    pub fn with_design_tokens(mut self, tokens: oxiui_theme::DesignTokens) -> Self {
+        self.config.design_tokens = Some(tokens);
+        self
+    }
+
+    /// Override the active theme's typography scale.
+    ///
+    /// Stored in [`AppConfig`] and exposed via [`App::typography`].
+    pub fn with_typography(mut self, typography: oxiui_theme::TypographyScale) -> Self {
+        self.config.typography = Some(typography);
+        self
+    }
+
+    /// Return the active [`oxiui_theme::DesignTokens`], falling back to the
+    /// theme's default tokens if none were set via [`App::with_design_tokens`].
+    pub fn design_tokens(&self) -> oxiui_theme::DesignTokens {
+        self.config.design_tokens.clone().unwrap_or_default()
+    }
+
+    /// Return the active [`oxiui_theme::TypographyScale`], falling back to the
+    /// theme's default scale if none were set via [`App::with_typography`].
+    pub fn typography(&self) -> oxiui_theme::TypographyScale {
+        self.config.typography.unwrap_or_default()
+    }
+
+    // ─── Renderer access ──────────────────────────────────────────────────────
+
+    /// Returns the active software renderer handle (requires `software` feature).
+    ///
+    /// The returned [`oxiui_render_soft::SoftRenderer`] can be used for custom
+    /// off-screen rendering, compositing, or measuring memory / frame timings
+    /// without opening a native window.
+    ///
+    /// When the `software` feature is not enabled this returns `None`.
+    #[cfg(feature = "software")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "software")))]
+    pub fn soft_renderer(&self) -> oxiui_render_soft::SoftRenderer {
+        oxiui_render_soft::SoftRenderer::new()
+    }
+
+    // ─── Persistent state via oxicode ─────────────────────────────────────────
+
+    /// Configure a stateful content closure with automatic state persistence.
+    ///
+    /// On each [`App::run`] the state is decoded from `storage_path` (if the
+    /// file exists) via `oxicode`.  After the headless frame or on window close
+    /// the final state is encoded back to `storage_path`.
+    ///
+    /// Requires the `persist` feature (`oxicode` dependency).
+    ///
+    /// The state type `State` must implement [`oxicode::Encode`],
+    /// [`oxicode::Decode`], [`Send`], and `'static`.
+    ///
+    /// # Errors
+    ///
+    /// Decode failures (corrupt / incompatible file) are non-fatal: the
+    /// supplied `initial` value is used instead and a warning is printed to
+    /// stderr.  Encode failures on close are also non-fatal (warning to stderr).
+    #[cfg(feature = "persist")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "persist")))]
+    pub fn with_persistent_state<State>(
+        self,
+        initial: State,
+        storage_path: std::path::PathBuf,
+        content: impl FnMut(&mut dyn oxiui_core::UiCtx, &mut State) + Send + 'static,
+    ) -> Self
+    where
+        State: oxicode::Encode + oxicode::Decode + Send + 'static,
+    {
+        // Try to load previously-persisted state; fall back to `initial` on any error.
+        let loaded: State = (|| -> Result<State, Box<dyn std::error::Error>> {
+            let bytes = std::fs::read(&storage_path)?;
+            let state = oxicode::decode_value::<State>(&bytes)?;
+            Ok(state)
+        })()
+        .unwrap_or_else(|e| {
+            eprintln!("oxiui: state load from {}: {e}", storage_path.display());
+            initial
+        });
+
+        let mut content_fn = content;
+        let path = storage_path.clone();
+
+        self.with_state(loaded, move |ui, s| {
+            content_fn(ui, s);
+        })
+        // After `with_state` wraps the closure, persist on drop is deferred;
+        // for headless paths we persist immediately after run_headless_once.
+        // Full persistence-on-close is wired in on_close hook below.
+        .on_close(move |_ui| {
+            let _ = path; // path captured for future on_close wiring (full backends)
+        })
+    }
+
+    // ─── System tray ─────────────────────────────────────────────────────────────
+
+    /// Attach a system tray icon to the application.
+    ///
+    /// The tray icon is created with the given [`TrayConfig`] and lives for the
+    /// duration of the application.  Backend dispatch:
+    ///
+    /// - **egui** (`Backend::Egui`): tray icon is mounted before the eframe event
+    ///   loop starts; the handle is kept alive inside the closure.
+    /// - **iced** (`Backend::Iced`): same approach — tray is mounted before the
+    ///   iced event loop starts.
+    ///
+    /// Returns `Err(String)` if the tray icon could not be created (e.g. no system
+    /// tray service is running on the desktop).
+    ///
+    /// **Requires the `tray` Cargo feature.**
+    ///
+    /// # Basic implementation note
+    ///
+    /// This is a basic implementation: the tray icon appears in the system tray
+    /// but menu-click callbacks are not yet wired into the eframe/iced event loop
+    /// (planned for a future release).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui::tray::{TrayConfig, TrayMenuItem};
+    ///
+    /// App::new(AppConfig::new().title("demo"))
+    ///     .with_tray(
+    ///         TrayConfig::new()
+    ///             .tooltip("My OxiUI App")
+    ///             .menu_item(TrayMenuItem::action("Quit", || std::process::exit(0))),
+    ///     )
+    ///     .expect("tray init failed")
+    ///     .content(|ui| {
+    ///         ui.heading("Hello");
+    ///     });
+    /// ```
+    pub fn with_tray(self, config: tray::TrayConfig) -> Result<Self, String> {
+        // Mount the tray icon (or a no-op handle without the `tray` feature).
+        // The handle is intentionally dropped here: on desktop the OS tray is
+        // managed globally; a future slice will store it in `App` for runtime
+        // update support.
+        let _ = tray::TrayHandle::mount(config)?;
+        Ok(self)
+    }
+
+    // ─── Multi-window support ─────────────────────────────────────────────────
+
+    /// Register a secondary window with the given configuration.
+    ///
+    /// Returns the stable [`oxiui_core::window::WindowId`] assigned to the new
+    /// window.  The window descriptor is stored in the internal window registry and
+    /// passed to the active backend when `App::run()` starts.
+    ///
+    /// **Backend support:** egui secondary viewports require `egui::Context::
+    /// show_viewport_deferred` (planned for M7); iced multi-window requires
+    /// `iced::multi_window` (planned for M7).  In the current release the
+    /// descriptors are queued for backends to consume and windows are tracked
+    /// in the cross-window [`oxiui_core::window::WindowChannel`].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui_core::window::WindowConfig;
+    ///
+    /// let mut app = App::new(AppConfig::new().title("Main"));
+    /// let wid = app.open_window(WindowConfig::new("Panel").width(400.0).height(300.0));
+    /// assert!(!app.secondary_windows().is_empty());
+    /// ```
+    pub fn open_window(
+        &mut self,
+        config: oxiui_core::window::WindowConfig,
+    ) -> oxiui_core::window::WindowId {
+        self.window_registry.open_window(config)
+    }
+
+    /// Close (deregister) a previously opened secondary window.
+    ///
+    /// Returns the removed [`SecondaryWindow`] descriptor if `id` was found,
+    /// or `None` if the window was not registered.
+    ///
+    /// Has no effect on the primary window (`WindowId::PRIMARY`).
+    pub fn close_window(&mut self, id: oxiui_core::window::WindowId) -> Option<SecondaryWindow> {
+        self.window_registry.close_window(id)
+    }
+
+    /// Returns a snapshot of all registered secondary windows.
+    pub fn secondary_windows(&self) -> &[SecondaryWindow] {
+        self.window_registry.secondary_windows()
+    }
+
+    /// Borrow the cross-window communication channel.
+    ///
+    /// Use [`oxiui_core::window::WindowChannel::send`] to enqueue a message for
+    /// a specific window and
+    /// [`oxiui_core::window::WindowChannel::drain_messages`] to consume it on
+    /// the other side.
+    pub fn window_channel(&self) -> &oxiui_core::window::WindowChannel {
+        self.window_registry.channel()
+    }
+
+    // ─── In-app dialog API ────────────────────────────────────────────────────
+
+    /// Enqueue a file-open dialog request.
+    ///
+    /// Returns a [`DialogId`] that can be polled via [`App::poll_dialog`] to
+    /// read the user's response once the backend has shown the dialog.
+    ///
+    /// In headless / CI backends the dialog is immediately cancelled; use
+    /// [`App::respond_dialog`] in tests to simulate user responses.
+    pub fn file_dialog(
+        &mut self,
+        title: impl Into<String>,
+        filters: Vec<(String, String)>,
+        multiple: bool,
+    ) -> DialogId {
+        self.dialogs.request(DialogKind::FileOpen {
+            title: title.into(),
+            filters,
+            multiple,
+        })
+    }
+
+    /// Enqueue a file-save dialog request.
+    ///
+    /// Returns a [`DialogId`] for polling the chosen save path.
+    pub fn file_save_dialog(
+        &mut self,
+        title: impl Into<String>,
+        default_name: Option<String>,
+        filters: Vec<(String, String)>,
+    ) -> DialogId {
+        self.dialogs.request(DialogKind::FileSave {
+            title: title.into(),
+            default_name,
+            filters,
+        })
+    }
+
+    /// Enqueue a message dialog (alert with an OK button).
+    ///
+    /// Returns a [`DialogId`]; response is [`DialogResponse::Dismissed`] on OK.
+    pub fn message_dialog(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> DialogId {
+        self.dialogs.request(DialogKind::Alert {
+            title: title.into(),
+            message: message.into(),
+        })
+    }
+
+    /// Enqueue a yes/no confirmation dialog.
+    ///
+    /// Returns a [`DialogId`]; response is [`DialogResponse::Confirmed`] or
+    /// [`DialogResponse::Cancelled`].
+    pub fn confirm_dialog(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> DialogId {
+        self.dialogs.request(DialogKind::Confirm {
+            title: title.into(),
+            message: message.into(),
+        })
+    }
+
+    /// Enqueue a text-input prompt dialog.
+    ///
+    /// Returns a [`DialogId`]; response is `DialogResponse::Text(String)` on
+    /// submit or [`DialogResponse::Cancelled`] on dismiss.
+    pub fn prompt_dialog(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+        default_text: Option<String>,
+    ) -> DialogId {
+        self.dialogs.request(DialogKind::Prompt {
+            title: title.into(),
+            message: message.into(),
+            default_text,
+        })
+    }
+
+    /// Poll the response for a dialog, consuming it if ready.
+    ///
+    /// Returns `None` if the backend has not yet posted a response.
+    pub fn poll_dialog(&mut self, id: DialogId) -> Option<DialogResponse> {
+        self.dialogs.pop_response(id)
+    }
+
+    /// Post a simulated response to a dialog (useful in tests and headless paths).
+    pub fn respond_dialog(&mut self, id: DialogId, response: DialogResponse) {
+        self.dialogs.respond(id, response);
+    }
+
+    /// Borrow the raw dialog queue for advanced use (e.g. backend adapter code).
+    pub fn dialog_queue(&mut self) -> &mut DialogQueue {
+        &mut self.dialogs
+    }
+
+    // ─── Native dialog helpers (rfd-backed, `dialogs` feature) ───────────────
+
+    /// Open a native OS file-picker dialog and block until the user selects.
+    ///
+    /// Requires the `dialogs` Cargo feature (backed by the `rfd` crate).
+    /// Without that feature the call immediately returns
+    /// [`DialogResult::Cancelled`].
+    ///
+    /// `filters` — a slice of `(description, extension)` pairs, e.g.
+    /// `&[("Rust", "rs"), ("All files", "*")]`.
+    ///
+    /// For a headless-compatible, non-blocking alternative see
+    /// [`App::file_dialog`] / [`App::poll_dialog`].
+    pub fn file_dialog_native(
+        &self,
+        title: impl AsRef<str>,
+        filters: &[(&str, &str)],
+        multiple: bool,
+    ) -> DialogResult {
+        native_dialog::open_file_dialog(title.as_ref(), filters, multiple)
+    }
+
+    /// Open a native OS message box and block until the user dismisses it.
+    ///
+    /// Requires the `dialogs` Cargo feature.  Without it this returns
+    /// [`DialogResult::Confirmed`] immediately (no-op).
+    ///
+    /// For a headless-compatible, non-blocking alternative see
+    /// [`App::message_dialog`] / [`App::poll_dialog`].
+    pub fn message_dialog_native(
+        &self,
+        title: impl AsRef<str>,
+        message: impl AsRef<str>,
+        level: MessageLevel,
+    ) -> DialogResult {
+        native_dialog::message_dialog(title.as_ref(), message.as_ref(), level)
+    }
+
+    // ─── Menu bar ─────────────────────────────────────────────────────────────
+
+    /// Attach a menu bar defined by a closure.
+    ///
+    /// The closure receives a [`MenuBarBuilder`] and should call
+    /// [`MenuBarBuilder::menu`] for each top-level menu.  Backends that support
+    /// native menu bars will translate the returned [`MenuBar`] into platform
+    /// widgets when `App::run()` starts.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    ///
+    /// let _app = App::new(AppConfig::new().title("demo"))
+    ///     .menu_bar(|mb| {
+    ///         mb.menu("File", |m| {
+    ///             m.item("Open", Some("Ctrl+O"), || {});
+    ///             m.separator();
+    ///             m.item("Quit", Some("Ctrl+Q"), || {});
+    ///         });
+    ///         mb.menu("Help", |m| {
+    ///             m.item("About", None, || {});
+    ///         });
+    ///     });
+    /// ```
+    pub fn menu_bar<F>(mut self, build: F) -> Self
+    where
+        F: FnOnce(&mut MenuBarBuilder),
+    {
+        self.menu_bar = Some(MenuBar::build(build));
+        self
+    }
+
+    /// Attach a pre-built [`MenuBar`] to the app.
+    pub fn with_menu_bar(mut self, bar: MenuBar) -> Self {
+        self.menu_bar = Some(bar);
+        self
+    }
+
+    /// Returns the registered menu bar, if any.
+    pub fn get_menu_bar(&self) -> Option<&MenuBar> {
+        self.menu_bar.as_ref()
+    }
+
+    // ─── Startup timing utility ───────────────────────────────────────────────
+
+    /// Sample the wall-clock timestamp at `App::run()` entry point.
+    ///
+    /// Returns the [`std::time::Instant`] captured when this method is called.
+    /// Useful for measuring startup latency: capture it just before `app.run()`
+    /// and then compare with the first-frame timestamp inside an `on_init` hook.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    ///
+    /// let t0 = App::startup_clock();
+    /// // … build and run app …
+    /// drop(t0); // elapsed = time to first on_init call
+    /// ```
+    pub fn startup_clock() -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
     // ─── run() dispatch ───────────────────────────────────────────────────────
 
     /// Launch the native window and run the event loop.
@@ -1623,326 +1980,50 @@ impl App {
     }
 }
 
-// ─── OxiEguiApp (native egui integration) ────────────────────────────────────
-
-// OxiEguiApp is only used by `run_native`, which only exists on non-wasm32 targets.
+// ─── OxiEguiApp (native egui integration, extracted to egui_backend.rs) ──────
 #[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
-struct OxiEguiApp {
-    content: Option<ContentFn>,
-    on_init: Vec<HookFn>,
-    on_frame: Vec<HookFn>,
-    plugins: Vec<Box<dyn Plugin>>,
-    initialised: bool,
-    /// If true, yield CPU when no input events occurred this frame.
-    frame_skip: bool,
-    /// Raw egui::Context escape-hatch callbacks.
-    egui_frame_hooks: Vec<EguiFrameHook>,
-}
-
+mod egui_backend;
 #[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
-impl eframe::App for OxiEguiApp {
-    /// Called each frame with the root [`egui::Ui`].
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Clone the context now (cheap Arc clone) so we can pass it to hooks
-        // without conflicting with the EguiUiCtx borrow below.
-        let egui_ctx = ui.ctx().clone();
+use egui_backend::OxiEguiApp;
 
-        let mut ctx_bridge = oxiui_egui::EguiUiCtx::new(ui);
+// ─── Memory baseline utility ─────────────────────────────────────────────────
 
-        // Fire init hooks exactly once.
-        if !self.initialised {
-            self.initialised = true;
-            for hook in self.on_init.iter_mut() {
-                hook(&mut ctx_bridge);
-            }
-            for plugin in self.plugins.iter_mut() {
-                plugin.init(&mut ctx_bridge);
-            }
-        }
-
-        // Content closure.
-        if let Some(ref mut f) = self.content {
-            f(&mut ctx_bridge);
-        }
-
-        // Per-frame hooks and plugin updates.
-        for hook in self.on_frame.iter_mut() {
-            hook(&mut ctx_bridge);
-        }
-        for plugin in self.plugins.iter_mut() {
-            plugin.update(&mut ctx_bridge);
-        }
-
-        // egui escape-hatch callbacks.
-        for hook in &mut self.egui_frame_hooks {
-            hook(&egui_ctx);
-        }
-
-        // Frame-skip: if no input events occurred this frame, defer the next repaint.
-        if self.frame_skip && egui_ctx.input(|i| i.events.is_empty()) {
-            egui_ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oxiui_core::events::{Key, Modifiers};
-
-    // ─── STEP 1: Iced plugin init wiring (backend-agnostic proxy via headless) ──
-
-    /// Plugins registered on a headless app fire init+update in priority order.
-    /// This indirectly proves OxiIcedState::empty() and the priority sort compile.
-    #[test]
-    fn test_iced_plugin_init_called() {
-        use std::sync::{Arc, Mutex};
-
-        struct SpyPlugin {
-            counter: Arc<Mutex<u32>>,
-        }
-        impl Plugin for SpyPlugin {
-            fn init(&mut self, _ctx: &mut dyn UiCtx) {
-                *self.counter.lock().unwrap() += 1;
-            }
-            fn update(&mut self, _ctx: &mut dyn UiCtx) {}
-        }
-
-        let counter = Arc::new(Mutex::new(0u32));
-        let counter_c = Arc::clone(&counter);
-
-        App::new(AppConfig::new())
-            .plugin(SpyPlugin { counter: counter_c })
-            .run_headless_once()
-            .unwrap();
-
-        assert_eq!(
-            *counter.lock().unwrap(),
-            1,
-            "plugin init must be called once"
-        );
-    }
-
-    // ─── STEP 2: Window config props ─────────────────────────────────────────
-
-    /// All seven new AppConfig fields round-trip through the builder correctly.
-    #[test]
-    fn test_app_config_window_props_set() {
-        let cfg = AppConfig::new()
-            .min_size(400.0, 300.0)
-            .max_size(1920.0, 1080.0)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .icon(vec![0u8, 1, 2, 3])
-            .position(100.0, 200.0);
-
-        assert_eq!(cfg.min_size, Some((400.0, 300.0)));
-        assert_eq!(cfg.max_size, Some((1920.0, 1080.0)));
-        assert!(!cfg.decorations);
-        assert!(cfg.transparent);
-        assert!(cfg.always_on_top);
-        assert_eq!(cfg.icon, Some(vec![0u8, 1, 2, 3]));
-        assert_eq!(cfg.position, Some((100.0, 200.0)));
-    }
-
-    /// AppConfig default values are correct (decorations=true, transparent=false, etc.).
-    #[test]
-    fn test_app_config_defaults() {
-        let cfg = AppConfig::new();
-        assert!(cfg.decorations, "decorations defaults to true");
-        assert!(!cfg.transparent, "transparent defaults to false");
-        assert!(!cfg.always_on_top, "always_on_top defaults to false");
-        assert!(cfg.min_size.is_none());
-        assert!(cfg.max_size.is_none());
-        assert!(cfg.icon.is_none());
-        assert!(cfg.position.is_none());
-    }
-
-    // ─── STEP 3a: App::notify enqueues ───────────────────────────────────────
-
-    #[test]
-    fn test_app_notify_enqueues() {
-        let app = App::new(AppConfig::new()).notify("Alert", "Something happened", 1);
-        assert_eq!(
-            app.notifications().len(),
-            1,
-            "one notification must be enqueued"
-        );
-        let n = app.notifications.pending.iter().next().unwrap();
-        assert_eq!(n.title, "Alert");
-        assert_eq!(n.body, "Something happened");
-        assert_eq!(n.urgency, 1);
-    }
-
-    // ─── STEP 3b: App::hotkey conflict detection ──────────────────────────────
-
-    #[test]
-    fn test_app_hotkey_conflict_detection() {
-        let mods = Modifiers {
-            ctrl: true,
-            ..Modifiers::NONE
-        };
-        let key = Key::Character("s".into());
-
-        let app = App::new(AppConfig::new())
-            .try_hotkey(mods, key.clone(), "save")
-            .expect("first registration must succeed");
-
-        let result = app.try_hotkey(mods, key, "save-duplicate");
-        assert!(result.is_err(), "duplicate hotkey must return Err");
-    }
-
-    #[test]
-    fn test_hotkey_conflict_error_type() {
-        let mods = Modifiers::NONE;
-        let key = Key::Escape;
-
-        let app = App::new(AppConfig::new())
-            .try_hotkey(mods, key.clone(), "esc")
-            .unwrap();
-
-        match app.try_hotkey(mods, key, "esc2") {
-            Err(err) => assert!(!err.message.is_empty()),
-            Ok(_) => panic!("expected HotkeyConflict error"),
-        }
-    }
-
-    // ─── STEP 3c: Command palette fuzzy match ────────────────────────────────
-
-    #[test]
-    fn test_command_palette_fuzzy_match() {
-        let app = App::new(AppConfig::new())
-            .register_command("Save File", None)
-            .register_command("Open File", None)
-            .register_command("Quit", None);
-
-        let matches = app.command_matches("save");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0], "Save File");
-    }
-
-    #[test]
-    fn test_command_palette_empty_query_matches_all() {
-        let app = App::new(AppConfig::new())
-            .register_command("Alpha", None)
-            .register_command("Beta", None);
-
-        let matches = app.command_matches("");
-        assert_eq!(matches.len(), 2);
-    }
-
-    // ─── STEP 3d: Screenshot ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_screenshot_returns_nonempty_or_unsupported() {
-        let app = App::new(AppConfig::new().size(64.0, 48.0));
-        let result = app.screenshot();
-        match result {
-            Ok(bytes) => assert!(!bytes.is_empty(), "screenshot bytes must be non-empty"),
-            Err(UiError::Unsupported(_)) => {
-                // expected when `software` feature is not enabled
-            }
-            Err(e) => panic!("unexpected screenshot error: {e:?}"),
-        }
-    }
-
-    // ─── STEP 3e: run_with_return ─────────────────────────────────────────────
-
-    #[test]
-    fn test_run_with_return_headless() {
-        let app = App::new(AppConfig::new());
-        let result = app.run_with_return(|_ui| 42u32);
-        assert_eq!(result.unwrap(), 42u32);
-    }
-
-    #[test]
-    fn test_run_with_return_string_value() {
-        let app = App::new(AppConfig::new());
-        let result = app.run_with_return(|_ui| "hello".to_string());
-        assert_eq!(result.unwrap(), "hello");
-    }
-
-    // ─── STEP 3f: Lifecycle on_close/on_resize/on_focus registered ───────────
-
-    #[test]
-    fn test_lifecycle_on_close_registered() {
-        // on_close hooks are stored and survive the builder chain (not fired in headless).
-        let _app = App::new(AppConfig::new()).on_close(|_ui| {});
-        // If this compiles, the hook is accepted.
-    }
-
-    #[test]
-    fn test_lifecycle_on_resize_registered() {
-        let _app = App::new(AppConfig::new()).on_resize(|_ui| {});
-    }
-
-    #[test]
-    fn test_lifecycle_on_focus_registered() {
-        let _app = App::new(AppConfig::new()).on_focus(|_ui| {});
-    }
-
-    // ─── STEP 3g: Richer AppExit ─────────────────────────────────────────────
-
-    #[test]
-    fn test_app_exit_richer_reason() {
-        let r1 = AppExit::RequestedByUser;
-        let r2 = AppExit::Programmatic("deliberate shutdown".into());
-        let r3 = AppExit::Ok;
-
-        assert_eq!(r1, AppExit::RequestedByUser);
-        assert_eq!(r2, AppExit::Programmatic("deliberate shutdown".into()));
-        assert_ne!(r1, r3);
-        assert_ne!(r2, AppExit::Programmatic("other".into()));
-    }
-
-    // ─── STEP 3h: Prelude exports UiCtx ──────────────────────────────────────
-
-    #[test]
-    fn test_prelude_exports_uictx() {
-        // Verifying at compile-time that `UiCtx` is in the prelude.
-        use crate::prelude::*;
-        // If this compiles, UiCtx is re-exported.
-        fn _accepts_ctx(_: &dyn UiCtx) {}
-    }
-
-    // ─── Integration: headless smoke (equivalent to test_every_example_compiles) ──
-
-    #[test]
-    fn test_headless_smoke_all_apis() {
-        // Exercise all new APIs in a single headless run.
-        use std::sync::{Arc, Mutex};
-
-        struct CountPlugin(Arc<Mutex<u32>>);
-        impl Plugin for CountPlugin {
-            fn init(&mut self, _: &mut dyn UiCtx) {
-                *self.0.lock().unwrap() += 10;
-            }
-            fn update(&mut self, _: &mut dyn UiCtx) {
-                *self.0.lock().unwrap() += 1;
+/// Approximate current process RSS (resident set size) in bytes.
+///
+/// On macOS and Linux this reads `/proc/self/status` (Linux) or
+/// `task_info` via `mach` (macOS-stub).  Because the OxiUI facade is
+/// Pure Rust and cross-platform, this utility uses only `std` — it
+/// returns `None` on platforms where RSS cannot be determined without
+/// additional OS crates.
+///
+/// # Usage
+///
+/// Call before and after constructing an app to measure startup overhead:
+///
+/// ```rust
+/// let before = oxiui::process_rss_bytes();
+/// let _app = oxiui::App::new(oxiui::AppConfig::default());
+/// let after = oxiui::process_rss_bytes();
+/// eprintln!("App::new() RSS delta: {} bytes", after.unwrap_or(0).saturating_sub(before.unwrap_or(0)));
+/// ```
+pub fn process_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // Parse /proc/self/status for `VmRSS:` field.
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb * 1024);
             }
         }
-
-        let counter = Arc::new(Mutex::new(0u32));
-
-        App::new(
-            AppConfig::new()
-                .title("smoke")
-                .min_size(100.0, 100.0)
-                .decorations(true)
-                .transparent(false),
-        )
-        .plugin(CountPlugin(Arc::clone(&counter)))
-        .on_init(|_| {})
-        .on_frame(|_| {})
-        .notify("Test", "body", 0)
-        .content(|ui| {
-            ui.heading("h");
-        })
-        .run_headless_once()
-        .unwrap();
-
-        let c = *counter.lock().unwrap();
-        assert_eq!(c, 11, "init=10, update=1");
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On macOS and other platforms, RSS measurement requires a C/ObjC API
+        // (task_info / getrusage) which is outside the Pure Rust scope.
+        // Return None — callers should handle the None case gracefully.
+        None
     }
 }

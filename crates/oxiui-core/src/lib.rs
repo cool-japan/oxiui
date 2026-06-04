@@ -32,6 +32,7 @@ pub mod style;
 pub mod text_style;
 pub mod tree;
 pub mod widget_ext;
+pub mod window;
 
 pub use anim::{Animator, Easing, Spring, Transition};
 pub use cache::LayoutCache;
@@ -50,12 +51,14 @@ pub use grid::{
     compute_grid, GridItem, GridLine, GridPlacement, GridSpan, GridTemplate, TrackSizing,
 };
 pub use layout::{
-    AlignContent, AlignItems, FlexDirection, FlexItem, FlexLayout, FlexWrap, JustifyContent,
+    layout_subtrees_parallel, AlignContent, AlignItems, FlexDirection, FlexItem, FlexLayout,
+    FlexWrap, JustifyContent, LayoutTask,
 };
-pub use paint::{DrawCommand, DrawList, RenderBackend};
+pub use paint::{BlendMode, DrawCommand, DrawList, RenderBackend};
 pub use reactive::{Computed, ReactiveError, ReactiveRuntime, Signal};
 pub use response::{
-    CheckboxResponse, DropdownResponse, SliderResponse, TextInputResponse, WidgetResponse,
+    CheckboxResponse, DropdownResponse, SliderResponse, TextAreaResponse, TextInputResponse,
+    WidgetResponse,
 };
 pub use scheduler::{Debounce, Scheduler, Throttle, TimerId};
 pub use solver::{Constraint, Expression, RelOp, Solver, SolverError, Strength, Term, Variable};
@@ -63,13 +66,14 @@ pub use style::{Border, BorderStyle, CursorShape, Margin, Padding};
 pub use text_style::TextStyle;
 pub use tree::{WidgetId, WidgetIdAllocator, WidgetNode, WidgetTree};
 pub use widget_ext::{ClipboardProvider, DragData, DragSource, DropEffect, DropTarget, WidgetExt};
+pub use window::{WindowChannel, WindowConfig, WindowEvent, WindowId, WindowManager};
 
 /// RGBA colour value, one `u8` per channel: `Color(r, g, b, a)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, oxicode::Encode, oxicode::Decode)]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 /// A palette of semantic colours for a UI theme.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub struct Palette {
     /// Window / page background colour.
     pub background: Color,
@@ -106,8 +110,22 @@ impl Palette {
     }
 }
 
+impl Default for Palette {
+    /// Returns a neutral light-mode palette (white background, indigo-500 accent).
+    fn default() -> Self {
+        Self {
+            background: Color(255, 255, 255, 255),
+            surface: Color(245, 245, 245, 255),
+            primary: Color(99, 102, 241, 255),
+            on_primary: Color(255, 255, 255, 255),
+            text: Color(15, 23, 42, 255),
+            muted: Color(100, 116, 139, 255),
+        }
+    }
+}
+
 /// The slant style of a font face.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub enum FontStyle {
     /// Upright (no slant).
     #[default]
@@ -125,7 +143,7 @@ pub enum FontStyle {
 ///
 /// `tag` is the 4-byte OpenType feature tag; `value` is the feature selector
 /// (0 = off, 1 = on, or a stylistic-set index).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, oxicode::Encode, oxicode::Decode)]
 pub struct FontFeature {
     /// The 4-character OpenType feature tag (e.g. `"liga"`, `"smcp"`, `"ss01"`).
     pub tag: String,
@@ -165,7 +183,7 @@ impl FontFeature {
 /// [`FontSpec::new`] constructor are unchanged. The richer typographic fields
 /// (`style`, `letter_spacing`, `line_height`, `features`) are additive and
 /// default to "no override", so existing call sites are unaffected.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, oxicode::Encode, oxicode::Decode)]
 pub struct FontSpec {
     /// Font family name.
     pub family: String,
@@ -439,6 +457,17 @@ pub trait UiCtx {
         response::TextInputResponse::unsupported()
     }
 
+    /// Render a multi-line text-area seeded with `text`.
+    ///
+    /// `min_rows` is a hint for the minimum number of visible lines; backends
+    /// that do not support multi-line editing fall back to this default
+    /// implementation which returns `supported = false`.
+    ///
+    /// Default: unsupported (`supported = false`, empty text, cursor at (0,0)).
+    fn text_area(&mut self, _text: &str, _min_rows: usize) -> response::TextAreaResponse {
+        response::TextAreaResponse::unsupported()
+    }
+
     /// Render a checkbox labelled `label` in state `checked`.
     ///
     /// Default: unsupported (`supported = false`).
@@ -609,18 +638,262 @@ pub trait UiCtx {
     }
 }
 
+/// Semantic accessibility role for a widget.
+///
+/// Used by [`Widget::a11y_role`] to describe a widget's function to
+/// assistive technologies. This is a core-level lightweight enum that the
+/// `oxiui-accessibility` crate maps to the full `accesskit::Role` set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum A11yRole {
+    /// A generic, unlabelled group of widgets.
+    Group,
+    /// A static text label (non-interactive).
+    StaticText,
+    /// An interactive button.
+    Button,
+    /// A heading / section title.
+    Heading,
+    /// A single-line text-input field.
+    TextInput,
+    /// A multi-line text-input area.
+    TextArea,
+    /// A checkbox or toggle control.
+    Checkbox,
+    /// A slider / range control.
+    Slider,
+    /// A progress bar.
+    ProgressBar,
+    /// A tab panel.
+    TabPanel,
+    /// A tab control.
+    Tab,
+    /// A scrollable list.
+    List,
+    /// A single item within a list.
+    ListItem,
+    /// A table widget.
+    Table,
+    /// A row within a table.
+    TableRow,
+    /// A cell within a table row.
+    TableCell,
+    /// A column header within a table.
+    ColumnHeader,
+    /// A dialog / modal overlay.
+    Dialog,
+    /// An image.
+    Image,
+    /// A hyperlink.
+    Link,
+    /// A menu widget.
+    Menu,
+    /// An item within a menu.
+    MenuItem,
+    /// An alert / status message.
+    Alert,
+    /// A tooltip.
+    Tooltip,
+    /// A tree widget.
+    Tree,
+    /// An item within a tree.
+    TreeItem,
+    /// Unknown / unspecified role.
+    #[default]
+    Unknown,
+}
+
+impl std::fmt::Display for A11yRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            A11yRole::Group => "group",
+            A11yRole::StaticText => "statictext",
+            A11yRole::Button => "button",
+            A11yRole::Heading => "heading",
+            A11yRole::TextInput => "textinput",
+            A11yRole::TextArea => "textarea",
+            A11yRole::Checkbox => "checkbox",
+            A11yRole::Slider => "slider",
+            A11yRole::ProgressBar => "progressbar",
+            A11yRole::TabPanel => "tabpanel",
+            A11yRole::Tab => "tab",
+            A11yRole::List => "list",
+            A11yRole::ListItem => "listitem",
+            A11yRole::Table => "table",
+            A11yRole::TableRow => "row",
+            A11yRole::TableCell => "cell",
+            A11yRole::ColumnHeader => "columnheader",
+            A11yRole::Dialog => "dialog",
+            A11yRole::Image => "img",
+            A11yRole::Link => "link",
+            A11yRole::Menu => "menu",
+            A11yRole::MenuItem => "menuitem",
+            A11yRole::Alert => "alert",
+            A11yRole::Tooltip => "tooltip",
+            A11yRole::Tree => "tree",
+            A11yRole::TreeItem => "treeitem",
+            A11yRole::Unknown => "unknown",
+        };
+        write!(f, "{s}")
+    }
+}
+
 /// A UI widget that can render itself into a [`UiCtx`].
 pub trait Widget {
     /// Render the widget into `ui`.
     fn render(&mut self, ui: &mut dyn UiCtx);
+
+    /// Return the accessibility role for this widget.
+    ///
+    /// Adapters call this to populate the a11y tree without requiring a full
+    /// `oxiui-accessibility` dependency in core. The default returns
+    /// [`A11yRole::Unknown`].
+    fn a11y_role(&self) -> A11yRole {
+        A11yRole::Unknown
+    }
+
+    /// Return a human-readable accessibility label for this widget.
+    ///
+    /// Used as the accessible name. Returns `None` by default (no label).
+    fn a11y_label(&self) -> Option<String> {
+        None
+    }
+
+    /// Return an accessibility description (longer hint text) for this widget.
+    ///
+    /// Returns `None` by default.
+    fn a11y_description(&self) -> Option<String> {
+        None
+    }
 }
 
-/// A UI theme that provides a colour palette and font specification.
+/// Spacing design tokens returned by [`Theme::spacing_tokens`].
+///
+/// Provides semantic spacing values that widgets and layout engines use instead
+/// of magic numbers. The values are in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpacingTokens {
+    /// Extra-small spacing (e.g. icon padding). Default: 4 px.
+    pub xs: f32,
+    /// Small spacing (e.g. button inner padding). Default: 8 px.
+    pub sm: f32,
+    /// Medium spacing (e.g. form field gap). Default: 12 px.
+    pub md: f32,
+    /// Large spacing (e.g. section gap). Default: 16 px.
+    pub lg: f32,
+    /// Extra-large spacing (e.g. page margin). Default: 24 px.
+    pub xl: f32,
+}
+
+impl Default for SpacingTokens {
+    /// COOLJAPAN 4-px-based default scale.
+    fn default() -> Self {
+        Self {
+            xs: 4.0,
+            sm: 8.0,
+            md: 12.0,
+            lg: 16.0,
+            xl: 24.0,
+        }
+    }
+}
+
+/// Border design tokens returned by [`Theme::border_tokens`].
+///
+/// Semantic border widths, radii, and style used across the UI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BorderTokens {
+    /// Default border width in logical pixels (e.g. 1 px).
+    pub width: f32,
+    /// Emphasis border width (e.g. focused outline, 2 px).
+    pub width_emphasis: f32,
+    /// Small border radius (e.g. tags, 2 px).
+    pub radius_sm: f32,
+    /// Medium border radius (e.g. cards, 4 px).
+    pub radius_md: f32,
+    /// Large border radius (e.g. dialogs, 8 px).
+    pub radius_lg: f32,
+    /// Fully rounded radius (pills, 9999 px).
+    pub radius_full: f32,
+}
+
+impl Default for BorderTokens {
+    /// COOLJAPAN conventional defaults.
+    fn default() -> Self {
+        Self {
+            width: 1.0,
+            width_emphasis: 2.0,
+            radius_sm: 2.0,
+            radius_md: 4.0,
+            radius_lg: 8.0,
+            radius_full: 9999.0,
+        }
+    }
+}
+
+/// Padding design tokens returned by [`Theme::padding_tokens`].
+///
+/// Semantic padding presets for common widget types.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaddingTokens {
+    /// Padding for compact / icon-only controls (e.g. icon button).
+    pub compact: style::Padding,
+    /// Padding for standard interactive controls (e.g. button, input).
+    pub control: style::Padding,
+    /// Padding for card / panel containers.
+    pub card: style::Padding,
+    /// Padding for page / dialog content areas.
+    pub page: style::Padding,
+}
+
+impl Default for PaddingTokens {
+    /// COOLJAPAN semantic defaults derived from the spacing scale.
+    fn default() -> Self {
+        Self {
+            compact: style::Padding::symmetric(4.0, 6.0),
+            control: style::Padding::symmetric(6.0, 12.0),
+            card: style::Padding::all(16.0),
+            page: style::Padding::all(24.0),
+        }
+    }
+}
+
+/// A UI theme that provides a colour palette, font specification, and design tokens.
+///
+/// The three required methods ([`palette`](Theme::palette), [`font`](Theme::font),
+/// and the standard base) are mandatory. The design-token methods
+/// ([`spacing_tokens`](Theme::spacing_tokens),
+/// [`border_tokens`](Theme::border_tokens),
+/// [`padding_tokens`](Theme::padding_tokens)) have **default implementations**
+/// that return COOLJAPAN's standard scales so existing theme implementations
+/// continue to compile unchanged. Themes that define a custom token set should
+/// override them.
 pub trait Theme: Send + Sync {
     /// Return the colour palette for this theme.
     fn palette(&self) -> &Palette;
     /// Return the font specification for this theme.
     fn font(&self) -> &FontSpec;
+
+    /// Return the spacing design-token scale for this theme.
+    ///
+    /// Default: [`SpacingTokens::default`] (4-px-based COOLJAPAN scale).
+    fn spacing_tokens(&self) -> SpacingTokens {
+        SpacingTokens::default()
+    }
+
+    /// Return the border design tokens (widths and radii) for this theme.
+    ///
+    /// Default: [`BorderTokens::default`] (conventional 1 px / 4 px radius).
+    fn border_tokens(&self) -> BorderTokens {
+        BorderTokens::default()
+    }
+
+    /// Return the padding design token presets for this theme.
+    ///
+    /// Default: [`PaddingTokens::default`] (derived from COOLJAPAN spacing).
+    fn padding_tokens(&self) -> PaddingTokens {
+        PaddingTokens::default()
+    }
 }
 
 /// A layout strategy that controls how children are arranged.
@@ -684,6 +957,35 @@ impl std::fmt::Display for UiError {
 }
 
 impl std::error::Error for UiError {}
+
+// ── Macros ──────────────────────────────────────────────────────────────────
+
+/// Bind a GPU context from `$expr`, skipping the test when no GPU is available.
+///
+/// If the environment variable `OXIUI_GPU_TESTS` is set to `"1"`, a missing GPU
+/// causes a panic (fail-loud mode for dedicated GPU CI runners). Otherwise the
+/// test function returns early with a printed skip notice.
+///
+/// # Example
+/// ```ignore
+/// require_gpu!(ctx, ComputeContext::try_new());
+/// // ctx: ComputeContext is bound here
+/// ```
+#[macro_export]
+macro_rules! require_gpu {
+    ($ctx:ident, $expr:expr) => {
+        let $ctx = match $expr {
+            Some(c) => c,
+            None => {
+                if ::std::env::var("OXIUI_GPU_TESTS").as_deref() == Ok("1") {
+                    panic!("OXIUI_GPU_TESTS=1 but no GPU adapter is available");
+                }
+                eprintln!("[skip] no GPU adapter — test skipped");
+                return;
+            }
+        };
+    };
+}
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -779,6 +1081,7 @@ mod tests {
         }
         let mut ui = BareCtx;
         assert!(!ui.text_input("x").supported);
+        assert!(!ui.text_area("x", 3).supported);
         assert!(!ui.checkbox("c", true).supported);
         assert!(!ui.slider(0.5, 0.0..=1.0).supported);
         assert!(!ui.dropdown(&["a", "b"], 0).supported);
@@ -841,5 +1144,126 @@ mod tests {
         assert_eq!(span.color, [255, 0, 0, 255]);
         assert_eq!(span.font_size, 24.0);
         assert_eq!(span.text, "Hello");
+    }
+
+    // ── Theme design-token tests ─────────────────────────────────────────────
+
+    /// A minimal theme that only overrides the required methods.
+    struct MinimalTheme {
+        palette: Palette,
+        font: FontSpec,
+    }
+
+    impl Theme for MinimalTheme {
+        fn palette(&self) -> &Palette {
+            &self.palette
+        }
+        fn font(&self) -> &FontSpec {
+            &self.font
+        }
+    }
+
+    #[test]
+    fn theme_default_spacing_tokens() {
+        let t = MinimalTheme {
+            palette: Palette::default(),
+            font: FontSpec::default(),
+        };
+        let s = t.spacing_tokens();
+        // COOLJAPAN 4-px-based scale.
+        assert!((s.xs - 4.0).abs() < 1e-6);
+        assert!((s.sm - 8.0).abs() < 1e-6);
+        assert!((s.md - 12.0).abs() < 1e-6);
+        assert!((s.lg - 16.0).abs() < 1e-6);
+        assert!((s.xl - 24.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn theme_default_border_tokens() {
+        let t = MinimalTheme {
+            palette: Palette::default(),
+            font: FontSpec::default(),
+        };
+        let b = t.border_tokens();
+        assert!((b.width - 1.0).abs() < 1e-6);
+        assert!((b.width_emphasis - 2.0).abs() < 1e-6);
+        assert!((b.radius_sm - 2.0).abs() < 1e-6);
+        assert!((b.radius_md - 4.0).abs() < 1e-6);
+        assert!((b.radius_lg - 8.0).abs() < 1e-6);
+        assert!((b.radius_full - 9999.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn theme_default_padding_tokens() {
+        let t = MinimalTheme {
+            palette: Palette::default(),
+            font: FontSpec::default(),
+        };
+        let p = t.padding_tokens();
+        // compact: symmetric(4,6)  → top=bottom=4, left=right=6
+        assert!((p.compact.0.top - 4.0).abs() < 1e-6);
+        assert!((p.compact.0.right - 6.0).abs() < 1e-6);
+        // control: symmetric(6,12) → top=bottom=6, left=right=12
+        assert!((p.control.0.top - 6.0).abs() < 1e-6);
+        assert!((p.control.0.right - 12.0).abs() < 1e-6);
+        // card: all(16)
+        assert!((p.card.0.top - 16.0).abs() < 1e-6);
+        assert!((p.card.0.left - 16.0).abs() < 1e-6);
+        // page: all(24)
+        assert!((p.page.0.top - 24.0).abs() < 1e-6);
+    }
+
+    /// A custom theme that overrides the design-token methods.
+    struct CustomTheme {
+        palette: Palette,
+        font: FontSpec,
+    }
+
+    impl Theme for CustomTheme {
+        fn palette(&self) -> &Palette {
+            &self.palette
+        }
+        fn font(&self) -> &FontSpec {
+            &self.font
+        }
+        fn spacing_tokens(&self) -> SpacingTokens {
+            SpacingTokens {
+                xs: 2.0,
+                sm: 4.0,
+                md: 8.0,
+                lg: 12.0,
+                xl: 16.0,
+            }
+        }
+    }
+
+    #[test]
+    fn theme_custom_spacing_overrides_default() {
+        let t = CustomTheme {
+            palette: Palette::default(),
+            font: FontSpec::default(),
+        };
+        let s = t.spacing_tokens();
+        assert!((s.xs - 2.0).abs() < 1e-6, "custom xs must be 2");
+        assert!((s.sm - 4.0).abs() < 1e-6, "custom sm must be 4");
+        // Border and padding still return defaults.
+        let b = t.border_tokens();
+        assert!((b.width - 1.0).abs() < 1e-6, "border default width still 1");
+    }
+}
+
+#[cfg(test)]
+mod macro_tests {
+    #[test]
+    fn require_gpu_binds_some() {
+        require_gpu!(val, Some(42u32));
+        assert_eq!(val, 42);
+    }
+
+    #[test]
+    fn require_gpu_skips_on_none() {
+        require_gpu!(_val, None::<u32>);
+        // If we reach here, env is not OXIUI_GPU_TESTS=1 — that's the non-skip path.
+        // The macro either returned early (skip) or panicked. Either way test passes if we get here.
     }
 }

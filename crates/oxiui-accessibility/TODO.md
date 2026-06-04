@@ -1,7 +1,7 @@
 # oxiui-accessibility TODO
 
 ## Status
-Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tree.rs, props.rs, builder.rs). Defines `A11yNode`, `A11yTree`, `WidgetRole`, `A11yNodeProps`, `A11yNodeBuilder`, `CheckedState`, `LiveSetting`, `TextCaret`, `TextSelection`, and `Toggled3`. `A11yTree::build()` and `build_and_store()` walk a node tree depth-first and produce an `accesskit::TreeUpdate`. `A11yTree::diff()` computes minimal deltas. Focus tracking, live-region `announce()`, fluent builder, 29-variant `WidgetRole` with `Display`, full prop set (description, placeholder, key_shortcut, disabled, expanded, selected, checked, value range, labelled_by, described_by, controlled_by, owns). Headless-testable. 49 tests, 0 warnings.
+Property-rich, incrementally updatable a11y layer. Defines `A11yNode`, `A11yTree`, `WidgetRole`, `A11yNodeProps`, `A11yNodeBuilder`, `CheckedState`, `LiveSetting`, `TextCaret`, `TextSelection`, and `Toggled3`. `A11yTree::build()` and `build_and_store()` walk a node tree depth-first and produce an `accesskit::TreeUpdate`. `A11yTree::diff()` computes minimal deltas. Focus tracking, live-region `announce()`, fluent builder, 30-variant `WidgetRole` with `Display`, full prop set (description, placeholder, key_shortcut, disabled, expanded, selected, checked, value range, labelled_by, described_by, controlled_by, owns). OsA11yPrefs (high-contrast/reduced-motion), A11yForest multi-window, NodePool, DirtyTracker, TabOrder nav, ActionDispatcher, build_table_a11y, synthesize_text_run_children, widget_bridge (Widget→A11yNode bridge, build_a11y_tree, A11yWidgetNode, NodeIdAllocator), text_bridge (text-bridge feature: TextInput/TextArea→A11yNode, 14 tests), FocusRing::ring_rect()/is_visible() render helpers (4 tests). Headless-testable. 144 tests (--all-features), 126 tests (default features), 0 warnings.
 
 ## Slice 3 Implementation Plan
 
@@ -48,7 +48,7 @@ Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tre
 
 ## Remaining / Deferred
 
-- [ ] Platform adapter integration: wire `accesskit_winit::Adapter` to the winit event loop — blocked on real winit window (cannot run headless in CI). Tracked as integration work, not a unit-test blocker.
+- [ ] Platform adapter integration: wire `accesskit_winit::Adapter` to the winit event loop — blocked on real winit window (cannot run headless in CI). Tracked as integration work, not a unit-test blocker. **BLOCKED: requires live winit window; cannot run headless in CI**
 - [x] Dynamic dirty-flag tracking on `A11yNode` (instead of Debug-string diff)
     - **Goal:** replace the Debug-string diff fallback with genuine per-node change tracking; add allocation-friendly node reuse and lazy property computation. Headless; crate-local.
     - **Design:** `A11yNode::content_hash()` hashes label/role/text_content/props/child-ID-list using `DefaultHasher`. `A11yTree` stores a `HashMap<NodeId, u64>` hash map alongside the AccessKit snapshot. `A11yTree::diff()` compares hashes O(1) per node instead of `format!("{:?}", accesskit::Node)`. `NodePool` provides active/free-list node reuse with `alloc`, `alloc_recycled`, `recycle`, `clear`. `Lazy<T>` wraps cached computed values with `get_or_compute`, `invalidate`, `set`, `get_if_clean`. Note: `accesskit::Node` doesn't impl PartialEq — dirty tracking lives on OxiUI's A11yNode wrapper only.
@@ -85,7 +85,7 @@ Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tre
   - **Files:** `crates/oxiui-accessibility/src/lib.rs`.
   - **Tests:** Register two distinct WindowA11yIds → forest holds both; get() returns the right tree; unregister removes it; windows() iterator yields both IDs.
   - **Risk:** None — additive to existing A11yForest struct.
-- [ ] `oxiui-core` integration: `Widget` trait `a11y_role()` / `a11y_label()`
+- [x] `oxiui-core` integration: `Widget` trait `a11y_role()` / `a11y_label()`
 - [x] Node pooling / arena for frame-rate-critical paths
 
 ## Proposed follow-ups
@@ -103,19 +103,19 @@ Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tre
 - [x] Announce utility / live regions (~30 SLOC)
 - [x] `WidgetRole::Display` (~30 SLOC)
 - [x] Landmark roles (~30 SLOC)
-- [ ] Platform adapter integration: wire `accesskit_winit::Adapter` (~200 SLOC)
+- [ ] Platform adapter integration: wire `accesskit_winit::Adapter` (~200 SLOC) **BLOCKED: requires live winit window; cannot run headless in CI**
 - [x] Dynamic tree updates: dirty-flag tracking (~200 SLOC)
 - [x] Action handling (~150 SLOC)
 - [x] Text accessibility: full cursor/selection synthesis (~100 SLOC)
 - [x] Keyboard navigation enforcement (~80 SLOC)
-- [ ] High-contrast mode detection (~80 SLOC)
-- [ ] Reduced-motion detection (~40 SLOC)
+- [x] High-contrast mode detection (~80 SLOC)
+- [x] Reduced-motion detection (~40 SLOC)
 - [x] Focus indicator rendering (~40 SLOC)
-- [ ] Table accessibility (~80 SLOC)
+- [x] Table accessibility (~80 SLOC)
 
 ## API Improvements
 - [x] `A11yNode` builder pattern: `A11yNodeBuilder::new(id, role).label("OK").description("…").disabled(false).build()`
-- [ ] Automatic tree generation: `fn build_a11y_tree(root: &dyn Widget) -> A11yNode`
+- [x] Automatic tree generation: `fn build_a11y_tree(root: &dyn Widget) -> A11yNode`
 - [x] `A11yTree::diff(old, new) -> TreeUpdate` minimal delta
 - [x] `WidgetRole` implements `Display`
 - [x] Make `TreeId` configurable; support multiple a11y trees for multi-window
@@ -128,7 +128,7 @@ Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tre
 ## Testing
 - [x] All 13 required Slice 3 tests pass
 - [x] All 12 original headless tree integration tests pass
-- [ ] Platform adapter smoke test (blocked on headless winit)
+- [ ] Platform adapter smoke test (blocked on headless winit) **BLOCKED: requires live winit window**
 - [x] Action handling test
 - [x] Keyboard navigation audit
 
@@ -138,9 +138,9 @@ Property-rich, incrementally updatable a11y layer (~1498 SLOC across lib.rs, tre
 - [x] Lazy property computation (`Lazy<T>` with `get_or_compute` / `invalidate`)
 
 ## Integration
-- [ ] `oxiui-core` Widget trait a11y methods
-- [ ] `oxiui-text` text input a11y
-- [ ] `oxiui-theme` high-contrast / reduced-motion
-- [ ] `oxiui-egui` / `oxiui-iced` bridge
-- [ ] `oxiui-table` structured table a11y
-- [ ] `oxiui-render-wgpu` / `oxiui-render-soft` focus ring rendering
+- [x] `oxiui-core` Widget trait a11y methods — `Widget::a11y_role()` / `a11y_label()` / `a11y_description()` in `oxiui-core`; `widget_bridge.rs` provides `core_role_to_widget_role`, `widget_to_a11y_node`, `build_a11y_tree`, `A11yWidgetNode` (11 tests, 0 warnings).
+- [x] `oxiui-text` text input a11y — `src/text_bridge.rs` (feature `text-bridge`): `text_input_to_a11y(&TextInput, &TextInputA11yParams) -> A11yNode` and `text_area_to_a11y(&TextArea, &TextInputA11yParams) -> A11yNode` bridge `oxiui-text` widgets to the a11y tree with cursor/selection descriptions (14 tests, 0 warnings).
+- [x] `oxiui-theme` high-contrast / reduced-motion — `OsA11yPrefs::query()` / `query_from()` in `lib.rs`; `oxiui-theme::os_prefers_high_contrast()` / `os_prefers_reduced_motion()` in `oxiui-theme`.
+- [x] `oxiui-egui` / `oxiui-iced` bridge — `oxiui-egui::a11y` (feature `a11y`): `oxiui_tree_to_accesskit`, `diff_a11y_trees`, `A11yEguiBridge`; `oxiui-iced::a11y_bridge` (feature `a11y`): `spec_to_a11y_node`, `spec_to_a11y_tree`, `IcedA11yConfig`.
+- [x] `oxiui-table` structured table a11y — `build_table_a11y` / `column_header_node` / `table_row_node` / `table_cell_node` in `src/tree.rs`; `oxiui-table::accessibility` module with `build_table_a11y_tree` / `build_table_a11y_full`.
+- [x] `oxiui-render-wgpu` / `oxiui-render-soft` focus ring rendering — `FocusRing::ring_rect()` and `FocusRing::is_visible()` helpers added to `src/focus.rs` (4 tests); renderers consume `FocusRing` / `FocusIndicator` via the `accessibility` feature gate in `oxiui-render-wgpu`.

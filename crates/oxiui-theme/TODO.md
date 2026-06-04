@@ -41,7 +41,7 @@ properties, `Breakpoint` (xs/sm/md/lg/xl/xxl) responsive thresholds, and
 - [x] Responsive breakpoints: `Breakpoint` enum (xs/sm/md/lg/xl/xxl) with pixel thresholds, `@media`-like conditional styling per breakpoint (~80 SLOC)
 - [x] Animation tokens: `TransitionSpec` with property name, duration, easing, delay; `AnimationSpec` with keyframes; token library of standard UI transitions (fade-in/slide-in/scale-up) (~120 SLOC)
 - [x] Runtime theme switching: `ThemeManager` that holds the active theme, notifies listeners on change (data-only; smooth-animated transitions live in render layer) (~100 SLOC)
-- [ ] Theme serialization: save/load themes to/from a Pure Rust format via oxicode; user-customizable theme files (~80 SLOC)
+- [x] Theme serialization: save/load themes to/from a Pure Rust format via oxicode; user-customizable theme files (~80 SLOC) — implemented in `src/serial.rs` using `oxicode::Encode + oxicode::Decode` derives on `ThemeSnapshot` (wraps `DesignTokens` + `TypographyScale`); public API: `serialize_theme` / `deserialize_theme`
 - [x] Color utilities: contrast ratio calculator (WCAG formula), color interpolation (Oklch lerp), lighten/darken/saturate/desaturate operations, alpha compositing (~150 SLOC)
 - [x] Predefined theme gallery: Material-style, Nord, Dracula, Solarized, Catppuccin palettes as opt-in constructors (~200 SLOC, ~40 each)
 - [x] Icon theme: `IconSet` trait for themed icon sets (outline/filled/rounded), SVG path data for common icons (close/menu/arrow/check/search), size variants (16/20/24/32) (~200 SLOC)
@@ -51,7 +51,7 @@ properties, `Breakpoint` (xs/sm/md/lg/xl/xxl) responsive thresholds, and
 - [x] `Palette` builder: `PaletteBuilder::new().background(Color(..)).primary(Color(..)).build()` + `validate()` with WCAG contrast warnings (re-exported from `oxiui_core::color_space`)
 - [x] Make `CooljapanTheme` public; allow users to construct custom themes with the same API
 - [x] Theme composition: `OverlayTheme::new(base).palette(p).font(f)` for partial palette/font customization without full redefinition
-- [ ] `#[derive(Clone)]` for themes; currently returns `Box<dyn Theme>` which is not cloneable (blocked: `Theme` trait lives in oxiui-core; would need an `Arc<dyn Theme>` migration)
+- [ ] `#[derive(Clone)]` for themes; currently returns `Box<dyn Theme>` which is not cloneable **BLOCKED: `Theme` trait lives in `oxiui-core`; would need an `Arc<dyn Theme>` migration across the entire workspace — API-breaking change requiring cross-crate coordination**
 
 ## Testing
 - [x] WCAG contrast ratio tests: verify all palette combinations meet minimum AA (4.5:1) or AAA (7.0:1) thresholds (~60 SLOC)
@@ -60,7 +60,7 @@ properties, `Breakpoint` (xs/sm/md/lg/xl/xxl) responsive thresholds, and
 - [x] Design token tests: spacing scale values are all multiples of 4, border-radius values are non-negative (~30 SLOC)
 - [x] Style sheet parser tests: simple selectors, compound selectors, property parsing, cascading order, specificity tiebreaker (~150 SLOC)
 - [x] Runtime theme switching tests: switch dark→light, verify all palette values changed, listener notification fired (~40 SLOC)
-- [ ] Theme serialization round-trip tests: serialize to oxicode, deserialize, compare equality (~40 SLOC)
+- [x] Theme serialization round-trip tests: serialize to oxicode, deserialize, compare equality (~40 SLOC) — 5 round-trip tests in `src/serial.rs` covering default snapshot, custom tokens, named-step lookup, typography field access, and invalid-bytes error handling
 - [x] Color utility tests: known contrast ratios (black/white = 21:1), interpolation endpoints, lighten/darken bounds, Oklch lerp, HSL saturate (~60 SLOC)
 
 ## Performance
@@ -79,12 +79,18 @@ properties, `Breakpoint` (xs/sm/md/lg/xl/xxl) responsive thresholds, and
 
 ## Integration
 - [x] `oxiui-core` integration: `Theme` trait expanded to include `DesignTokens` and `TypographyScale`; `Layout` trait should consume spacing tokens
-- [ ] `oxiui-egui` integration: map `DesignTokens` (spacing, border-radius, shadows) to egui `Style`/`Spacing`/`Rounding` structs, not just `Visuals`
-- [ ] `oxiui-iced` integration: map `DesignTokens` to iced `Container::Style`, `Button::Style`, etc.; extend `palette_to_iced_theme` to cover the expanded palette
-- [ ] `oxiui-render-wgpu` integration: shadow rendering uses `ShadowSpec` token values; gradient stops from theme color scale
+- [x] `oxiui-egui` integration: map `DesignTokens` (spacing, border-radius, shadows) to egui `Style`/`Spacing`/`Rounding` structs, not just `Visuals` — `palette_to_egui_visuals_with_tokens` + `tokens_to_egui_style` in `oxiui-egui/src/lib.rs`
+- [x] `oxiui-iced` integration: map `DesignTokens` to iced `Container::Style`, `Button::Style`, etc.; extend `palette_to_iced_theme` to cover the expanded palette — `DesignTokensAdapter` + `palette_and_tokens_to_iced_theme` + `text_input_style_from_palette` + `scrollable_style_from_palette` in `oxiui-iced/src/theme.rs`
+- [x] `oxiui-render-wgpu` integration: shadow rendering uses `ShadowSpec` token values; gradient stops from theme color scale — `theme_bridge` module gated behind `theme` feature in `oxiui-render-wgpu` (2026-06-03)
 - [x] `oxiui-render-soft` integration: CPU shadow rendering from `ShadowSpec`
 - [x] `oxiui-accessibility` integration: high-contrast theme auto-detected and applied when OS accessibility preference is set
-- [ ] COOLJAPAN ecosystem: theme serialization via oxicode (not bincode); color math via pure Rust (no OxiBLAS needed for color ops)
+- [x] COOLJAPAN ecosystem: theme serialization via oxicode (not bincode); color math via pure Rust (no OxiBLAS needed for color ops)
+  - **Goal:** `ThemeSnapshot` round-trips the full theme — design tokens, typography, colour palette, and fonts — through oxicode. Blocker (missing core derives) removed by building the prerequisite in `oxiui-core`. Completes this item.
+  - **Design:** (1) `oxiui-core`: add `oxicode.workspace = true` to Cargo.toml; derive `oxicode::Encode, oxicode::Decode` on `Color`, `Palette`, `FontSpec`, `FontStyle` (enum with Oblique{degrees:f32} struct-variant — supported), `FontFeature`; add `Default + PartialEq` to `Palette` (hand-written sensible default, required by ThemeSnapshot). (2) `oxiui-theme/src/serial.rs`: extend `ThemeSnapshot` with `palette: Palette` and font fields; update Default + serialize/deserialize. Verify color math is already pure Rust in `oxiui_core::color_space` — flip item to [x] once confirmed.
+  - **Files:** `oxiui-core/Cargo.toml`, `oxiui-core/src/lib.rs`, `oxiui-theme/src/serial.rs`.
+  - **Prerequisites:** five oxiui-core derives + `Palette: Default + PartialEq`.
+  - **Tests:** palette round-trip; `FontStyle::Oblique{degrees}` round-trip; full-snapshot round-trip incl. palette+fonts; existing 5 round-trip tests green.
+  - **Risk:** purely additive (no API removed/renamed, cycle-free). Palette Default: hand-write neutral colours (not all-zero transparent).
 
 ## Proposed follow-ups
 - CSS-like style sheets, style inheritance, responsive breakpoints, theme

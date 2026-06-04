@@ -11,6 +11,10 @@
 //! 8.  `test_text_selection_is_not_collapsed`— range selection is not collapsed.
 //! 9.  `test_build_text_input_a11y`          — node carries content and description.
 //! 10. `test_update_text_cursor`             — updating cursor changes description.
+//! 11. `test_focus_ring_is_visible`          — default ring is visible.
+//! 12. `test_focus_ring_invisible_when_transparent` — transparent ring is not visible.
+//! 13. `test_focus_ring_invisible_when_zero_width`  — zero-width ring is not visible.
+//! 14. `test_focus_ring_rect_outset`         — ring_rect outsets by offset+half_width.
 
 use accesskit::NodeId;
 use oxiui_accessibility::text_a11y::{build_text_input_a11y, update_text_cursor, TextSelection};
@@ -157,5 +161,69 @@ fn test_update_text_cursor() {
     assert!(
         after != before,
         "description must change after update_text_cursor"
+    );
+}
+
+// ── FocusRing rendering helper tests ─────────────────────────────────────────
+
+#[test]
+fn test_focus_ring_is_visible() {
+    // Default ring (opaque blue, width 2.0) must be visible.
+    let ring = FocusRing::default();
+    assert!(ring.is_visible(), "default ring must be visible");
+}
+
+#[test]
+fn test_focus_ring_invisible_when_transparent() {
+    let ring = FocusRing {
+        color: [0, 0, 0, 0], // fully transparent
+        ..Default::default()
+    };
+    assert!(
+        !ring.is_visible(),
+        "fully transparent ring must not be visible"
+    );
+}
+
+#[test]
+fn test_focus_ring_invisible_when_zero_width() {
+    let ring = FocusRing {
+        width: 0.0,
+        ..Default::default()
+    };
+    assert!(!ring.is_visible(), "zero-width ring must not be visible");
+}
+
+#[test]
+fn test_focus_ring_rect_outset() {
+    // ring: width=2, offset=2 → grow = 2 + 1 = 3
+    let ring = FocusRing {
+        width: 2.0,
+        offset: 2.0,
+        ..Default::default()
+    };
+    let (rx, ry, rw, rh) = ring.ring_rect(10.0, 20.0, 100.0, 30.0);
+
+    let grow = 2.0f32 + 2.0 / 2.0; // offset + half_width = 3.0
+
+    assert!(
+        (rx - (10.0 - grow)).abs() < 1e-5,
+        "rx should be {}, got {rx}",
+        10.0 - grow
+    );
+    assert!(
+        (ry - (20.0 - grow)).abs() < 1e-5,
+        "ry should be {}, got {ry}",
+        20.0 - grow
+    );
+    assert!(
+        (rw - (100.0 + grow * 2.0)).abs() < 1e-5,
+        "rw should be {}, got {rw}",
+        100.0 + grow * 2.0
+    );
+    assert!(
+        (rh - (30.0 + grow * 2.0)).abs() < 1e-5,
+        "rh should be {}, got {rh}",
+        30.0 + grow * 2.0
     );
 }

@@ -13,7 +13,7 @@ This crate is built for the browser via [`wasm-pack`](https://rustwasm.github.io
 
 ```toml
 [dependencies]
-oxiui-web = "0.1.0"
+oxiui-web = "0.1.1"
 ```
 
 ```sh
@@ -25,7 +25,7 @@ Most users do not depend on `oxiui-web` directly — they enable it through the 
 
 ```toml
 [dependencies]
-oxiui = { version = "0.1.0", features = ["web"] }
+oxiui = { version = "0.1.1", features = ["web"] }
 ```
 
 ## Quick Start
