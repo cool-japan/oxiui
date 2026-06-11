@@ -74,11 +74,8 @@ Comprehensive wasm32 entry point with full event handling, IME, clipboard, drag-
 - [ ] ResizeObserver test: simulate resize callback, verify `UiEvent::Resize` emitted with correct dimensions (~20 SLOC) — DEFERRED (requires wasm-pack headless browser)
 - [x] IME composition test: `ime::tests` verifies `ime_preedit_event`, `ime_commit_event`, and `ime_full_cycle` produce correct events natively (done 2026-06-03)
 - [ ] WebGPU fallback test: mock `navigator.gpu = undefined`, verify GL backend selected (~20 SLOC) — DEFERRED (requires wasm-pack headless browser)
-- [ ] wasm binary size check: verify release build wasm < 2MB (gzip < 500KB) for reasonable load times (~0 SLOC, CI gate) — **DEFERRED (requires wasm-pack build pipeline and CI wasm32 target)**
-- [ ] Lighthouse accessibility audit: canvas fallback content has ARIA attributes, keyboard navigable (~manual, CI if possible) — **BLOCKED: requires deployed browser environment; cannot automate without headless Chrome + Lighthouse CI**
 
 ## Performance
-- [ ] wasm-opt: run `wasm-opt -O3` post-build to minimize binary size and improve runtime performance — **DEFERRED (post-build tooling step; requires binaryen installed in CI)**
 - [ ] Code splitting: lazy-load non-critical features (drag-and-drop, service worker) as separate wasm modules if supported — **DEFERRED (requires bundler-specific wasm chunk splitting; not supported in stable wasm-bindgen today)**
 - [x] `requestAnimationFrame` scheduling with visibilitychange: only render when dirty, skip frames when tab is backgrounded — `DirtyFlag`, `bind_visibility_change`, and `start_dirty_animation_loop` complete in `performance.rs`. **Updated 2026-06-03:** `WasmApp` in `wasm.rs` now wires a `visibilitychange` DOM listener on `document` and a `DirtyFlag`; when the tab is hidden (`document.visibilityState == "hidden"`) or no dirty input occurred, `egui::Context::request_repaint_after(1s)` defers the next rAF to reduce CPU/battery usage. The first frame always renders immediately (dirty flag pre-set to `true`).
 - [ ] SharedArrayBuffer: if cross-origin isolation headers are set, use shared memory for parallel rendering (rayon-web) — **DEFERRED (requires COOP/COEP server headers; rayon-web not yet stable on wasm32)**

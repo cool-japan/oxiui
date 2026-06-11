@@ -3,10 +3,10 @@
 //! Builds an AccessKit / OxiUI accessibility tree for a `Table<S>` so that
 //! screen readers and assistive technologies can:
 //!
-//! - Enumerate each data row as a [`WidgetRole::TableRow`].
-//! - Enumerate each cell as a [`WidgetRole::TableCell`] with its text content
+//! - Enumerate each data row as a `WidgetRole::TableRow`.
+//! - Enumerate each cell as a `WidgetRole::TableCell` with its text content
 //!   and a `"Row N Column M"` description.
-//! - Enumerate each column header as [`WidgetRole::ColumnHeader`] with the
+//! - Enumerate each column header as `WidgetRole::ColumnHeader` with the
 //!   column name as its label and a sort-state annotation.
 //! - Announce the selected row(s) via `is_selected = true` on the matching
 //!   row nodes.
@@ -54,7 +54,7 @@ use oxiui_accessibility::tree::{
 /// feature flag.
 ///
 /// When `a11y-table` is enabled, [`A11yRole`] maps 1:1 to
-/// [`oxiui_accessibility::tree::WidgetRole`].
+/// `oxiui_accessibility::tree::WidgetRole`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum A11yRole {
     /// A generic container group (table root).
@@ -74,8 +74,8 @@ pub enum A11yRole {
 /// Used by callers that do not enable the `a11y-table` feature but still
 /// want to inspect the logical structure produced by
 /// [`build_table_a11y_tree`].  When `a11y-table` is enabled, the full
-/// [`oxiui_accessibility::tree::A11yNode`] tree is also available via
-/// [`build_table_a11y_full`].
+/// `oxiui_accessibility::tree::A11yNode` tree is also available via
+/// `build_table_a11y_full` (requires `a11y-table` feature).
 #[derive(Debug)]
 pub struct LightNode {
     /// Sequential id (1-based).
@@ -261,9 +261,9 @@ pub fn build_table_a11y_with_text(params: &TableA11yWithTextParams<'_>) -> Light
 
 // ── Full AccessKit integration (a11y-table feature) ───────────────────────────
 
-/// Build a full [`oxiui_accessibility::tree::A11yNode`] tree for the table.
+/// Build a full `oxiui_accessibility::tree::A11yNode` tree for the table.
 ///
-/// Delegates to [`oxiui_accessibility::tree::build_table_a11y`] which
+/// Delegates to `oxiui_accessibility::tree::build_table_a11y` which
 /// produces the complete AccessKit node structure with proper role, label,
 /// and description mapping.
 ///
@@ -273,7 +273,7 @@ pub fn build_table_a11y_full(row_count: usize, col_count: usize, col_headers: &[
     upstream_build_table(row_count, col_count, col_headers)
 }
 
-/// Build a full [`oxiui_accessibility::tree::A11yNode`] tree with per-cell text.
+/// Build a full `oxiui_accessibility::tree::A11yNode` tree with per-cell text.
 ///
 /// Constructs the table root node with column headers and row/cell children,
 /// filling in the `text_content` field of each cell node from `cell_text`.

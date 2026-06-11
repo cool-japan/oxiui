@@ -1,6 +1,6 @@
 # OxiUI TODO
 
-**v0.1.1 released 2026-06-04** — patch bump; M0–M5 complete, 14 crates, 1 948 tests, Pure Rust.
+**v0.1.2 released 2026-06-10** | **v0.1.1 released 2026-06-04** — patch bump; M0–M6 complete, 14 crates, 1 767+ tests, Pure Rust.
 
 Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
 
@@ -81,11 +81,9 @@ Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
   - **Tests:** headless — `render_headless_once(800, 600)` RGBA buffer has > 0 non-background pixels; PNG round-trip parses back via `png` crate. high-contrast — luma contrast ratio > 7.0 on foreground/background pair (WCAG AAA). slint — `cargo build --example hello_slint --features slint` green. dioxus — same. ffi-audit Docker smoke passes.
   - **Risk:** slint Theme/Style plug-in seam — verify in 1.16.1; if absent, palette mapping is docs-only note. dioxus 0.7 API churn — confirm public API surface at impl. softbuffer headless on macOS/Linux requires no display server (pure pixel buffer).
 
-- [ ] **M6 — `oxiui-compute-wgpu` + `oxiui-render-wgpu` crates.io publication and
-  oxiphysics migration** (blocked on: User `cargo publish` approval)
-  - **Goal:** Publish `oxiui-compute-wgpu` and `oxiui-render-wgpu` to crates.io
-    so downstream consumers can depend on them via version (not path deps).
-    Migrate `oxiphysics` from raw `wgpu` to these sub-crates.
+- [x] **M6 — `oxiui-compute-wgpu` + `oxiui-render-wgpu` crates.io publication** (completed 2026-06-04)
+  - **Done:** `oxiui-compute-wgpu` v0.1.1 and `oxiui-render-wgpu` v0.1.1 published to crates.io 2026-06-04.
+    Downstream consumers can now depend on them via version. `oxiphysics` migration is a separate future task.
   - **`oxiui-compute-wgpu` additions completed (2026-06-02):**
     - `SHADER_SPH_DENSITY` — cubic-spline SPH density kernel (WGSL)
     - `SHADER_BITONIC_SORT` — in-workgroup bitonic sort ≤1024 f32 values (WGSL)
@@ -122,6 +120,10 @@ Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
       particle counts, oxiphysics-gpu must either call sort in tiled segments or
       switch to a multi-pass radix sort (future `SHADER_RADIX_SORT_MULTIPASS`
       kernel).
+
+## Dependency inversion (2026-06-05)
+
+- [x] Decision: `oxiui-web` stays `publish = false` and out of the `oxiui` facade — documented as a copy-template wasm32 cdylib entry point (not a library dep). Facade README corrected to drop the non-existent `web` feature. (done 2026-06-05)
 
 ## Per-Crate Detail
 

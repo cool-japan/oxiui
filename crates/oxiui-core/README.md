@@ -11,10 +11,10 @@ The crate is `#![forbid(unsafe_code)]` and has **zero mandatory external depende
 
 ```toml
 [dependencies]
-oxiui-core = "0.1.1"
+oxiui-core = "0.1.2"
 
 # Enable serde on UiEvent and its nested event types:
-oxiui-core = { version = "0.1.1", features = ["serde"] }
+oxiui-core = { version = "0.1.2", features = ["serde"] }
 ```
 
 ## Quick Start

@@ -1,6 +1,6 @@
 # OxiUI
 
-**Version 0.1.1 — 2026-06-04**
+**v0.1.2 released 2026-06-10** | v0.1.1 released 2026-06-04
 
 OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no
 SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings. It is a
@@ -11,9 +11,9 @@ windowed through **winit**, with all text shaped through **OxiText** +
 build with a single `cargo build` in a fresh `rust:slim` container, with no
 `libgtk-dev`, `libqt-dev`, or `libsdl2-dev` choreography.
 
-## Status: v0.1.1 — Milestones M0–M5 complete
+## Status: v0.1.2 released 2026-06-10 — Milestones M0–M6 complete
 
-All six planned milestones for the initial release are done:
+All planned milestones through M6 are done:
 
 | Milestone | Description | Status |
 |-----------|-------------|--------|
@@ -23,19 +23,20 @@ All six planned milestones for the initial release are done:
 | M3 | `oxiui-table` virtualized rows + iced facade `run()` fully wired | ✓ |
 | M4 | accesskit a11y + wasm32 entry point + IME CJK events | ✓ |
 | M5 | softbuffer headless stable + high-contrast WCAG-AAA + slint/dioxus adapters | ✓ |
+| M6 | `oxiui-compute-wgpu` + `oxiui-render-wgpu` published to crates.io | ✓ |
 
 ## Quick start
 
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.1.1"
+oxiui = "0.1.2"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.1.1", default-features = false, features = ["software"] }
+oxiui = { version = "0.1.2", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.1.1", features = ["iced"] }
+oxiui = { version = "0.1.2", features = ["iced"] }
 ```
 
 ```rust
@@ -72,7 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tests
 
-1 948 unit tests across 14 crates — all pass (`cargo nextest run`).
+1 767 unit tests across 14 crates under default features — all pass
+(`cargo nextest run --no-default-features`). With all features enabled
+the count is higher (egui/iced/slint adapters add additional tests).
 
 ## Replaces (FFI being eliminated)
 

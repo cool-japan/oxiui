@@ -7,6 +7,56 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.2] - 2026-06-10
+
+### Added
+
+- **`oxiui-render-wgpu`: `TextBridge::expand_draw_text_commands`** — new method that
+  pre-expands all `DrawText` commands in a `DrawList` into per-glyph `Image` blits before
+  the batcher is called; shaping/rasterization errors are silently skipped per-glyph so
+  a single bad string cannot abort a frame.
+
+- **`oxiui-render-wgpu`: `geometry.rs` tests** — five new unit tests:
+  `solid_rect_produces_6_vertices`, `n_solid_rects_produce_n_times_6_vertices`,
+  `image_produces_one_textured_draw_with_6_vertices`, `clip_pushpop_produces_correct_segments`,
+  `scissor_culls_offscreen_rects`.
+
+- **`oxiui`: `AppConfig`** — new window configuration builder (`title`, `size`, `resizable`,
+  `min_size`, `max_size`, `decorations`, `transparent`, `always_on_top`, `icon`, `position`,
+  `extra_fonts`, `design_tokens`, `typography`).
+
+- **`oxiui`: `CommandPalette` + `Command`** — searchable command registry with fuzzy-match
+  search; `register`, `register_with_shortcut`, `search` APIs.
+
+- **`oxiui`: `NotificationQueue`** — notification queuing with deduplication, priority, and
+  timeout support.
+
+- **`oxiui`: PNG icon decoding** — `DrawText` handling and PNG icon decoding integrated into
+  the egui backend via `app_config.icon`.
+
+### Changed
+
+- **`oxiui-render-soft`: `DynBackend`** — `Soft` and `Wgpu` variants now hold `Box<…>`
+  instead of inline values, reducing stack footprint and eliminating the large-enum-variant
+  clippy lint.  `as_soft()` / `as_soft_mut()` updated accordingly.
+
+- **`oxiui-render-wgpu`: `batch.rs` `DrawText` classification** — with the `text` feature
+  enabled, `DrawText` is pre-expanded before the batcher is called and any residual is
+  classified as `Textured`; without the feature it falls back to `SolidColor`.
+
+- **`oxiui`: `lib.rs` refactored** — `AppConfig`, `CommandPalette`, and `NotificationQueue`
+  extracted to dedicated modules (`app_config.rs`, `command.rs`, `notification.rs`);
+  `lib.rs` SLoC reduced from ~357 to focused facade re-exports.
+
+### Fixed
+
+- **`oxiui-render-soft`: `blit_glyph_clipped`** — now correctly `#[cfg(feature = "text")]`-
+  gated; eliminates dead-code warning under `--no-default-features` builds.
+
+---
+
+---
+
 ## [0.1.1] - 2026-06-04
 
 ### Added
@@ -215,4 +265,5 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - License: Apache-2.0.
 - No `unwrap()` in production code.
 
+[0.1.2]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.1

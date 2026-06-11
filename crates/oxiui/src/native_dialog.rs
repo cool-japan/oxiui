@@ -1,4 +1,4 @@
-//! Native OS file / message dialog integration via [`rfd`].
+//! Native OS file / message dialog integration via `rfd`.
 //!
 //! Enabled by the `dialogs` Cargo feature.  Provides blocking and async helpers
 //! that call the platform's native file picker and message box APIs via the

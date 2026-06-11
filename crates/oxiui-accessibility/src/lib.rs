@@ -27,8 +27,8 @@
 //! * [`builder`]        — [`A11yNodeBuilder`] fluent builder
 //! * [`widget_bridge`] — bridge between [`oxiui_core::Widget`] and the a11y tree;
 //!   [`widget_to_a11y_node`], [`build_a11y_tree`], [`A11yWidgetNode`]
-//! * [`text_bridge`]    — *(feature `text-bridge`)* bridge between
-//!   [`oxiui_text::TextInput`] / [`oxiui_text::TextArea`] and [`A11yNode`].
+//! * `text_bridge`    — *(feature `text-bridge`)* bridge between
+//!   `oxiui_text::TextInput` / `oxiui_text::TextArea` and [`A11yNode`].
 
 pub mod action;
 pub mod builder;

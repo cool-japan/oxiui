@@ -292,8 +292,18 @@ fn capabilities_reflect_implemented_features() {
         Some(b) => b,
         None => return,
     };
-    // Deferred features (require glyph-atlas pipeline).
-    assert!(!backend.supports_text());
+    // Text is supported when the `text` feature is enabled (TextBridge wired in).
+    // Without the `text` feature, text rendering degrades to a no-op.
+    #[cfg(feature = "text")]
+    assert!(
+        backend.supports_text(),
+        "text must be supported with `text` feature"
+    );
+    #[cfg(not(feature = "text"))]
+    assert!(
+        !backend.supports_text(),
+        "text must not be supported without `text` feature"
+    );
     // Implemented in this slice.
     assert!(backend.supports_images());
     assert!(backend.supports_blur());

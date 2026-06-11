@@ -46,11 +46,11 @@ wasm-bindgen-futures     = { workspace = true }
 # Base web-sys feature set — core DOM APIs always present on wasm32.
 # Optional feature-specific APIs (drag-drop, service-worker) are added below.
 web-sys                  = { workspace = true }
-js-sys                   = { version = "0.3" }
+js-sys.workspace = true
 eframe                   = { workspace = true }
 egui                     = { workspace = true }
 serde_json               = { workspace = true }
-console_error_panic_hook = { version = "0.1.7" }
+console_error_panic_hook.workspace = true
 
 # Drag-and-drop: extra web-sys features needed only with the `drag-drop` gate.
 # These are already included in the workspace web-sys feature list; adding

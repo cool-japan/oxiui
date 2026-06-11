@@ -171,8 +171,19 @@ fn classify(cmd: &DrawCommand) -> BatchKey {
         | DrawCommand::LineAa { .. }
         | DrawCommand::LineThick { .. }
         | DrawCommand::LineDashed { .. }
-        | DrawCommand::BoxShadow { .. }
-        | DrawCommand::DrawText { .. } => (PipelineKind::SolidColor, None),
+        | DrawCommand::BoxShadow { .. } => (PipelineKind::SolidColor, None),
+
+        // When the `text` feature is enabled, DrawText is pre-expanded into
+        // per-glyph Image blits (textured quads) by TextBridge before the
+        // batcher is called; classify any residual DrawText as Textured so
+        // it doesn't merge with solid-colour geometry.
+        #[cfg(feature = "text")]
+        DrawCommand::DrawText { .. } => (PipelineKind::Textured, None),
+
+        // Without the `text` feature, DrawText falls back to solid-colour
+        // (the geometry builder will skip it with a no-op comment).
+        #[cfg(not(feature = "text"))]
+        DrawCommand::DrawText { .. } => (PipelineKind::SolidColor, None),
 
         DrawCommand::Image { .. } | DrawCommand::NineSlice { .. } => (PipelineKind::Textured, None),
 

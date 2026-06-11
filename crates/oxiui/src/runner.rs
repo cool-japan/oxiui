@@ -5,9 +5,10 @@
 //! the app selects and boxes the appropriate runner at run time.
 //!
 //! # Current state
-//! [`EguiRunner`] and `IcedRunner` are wiring stubs. The live rendering paths
-//! remain in `lib.rs`'s `run_egui_or_fallback` / `run_iced` methods. These stubs
-//! exist to provide a stable public trait surface; full delegation is planned for M6.
+//! `EguiRunner` (feature `egui`) and `IcedRunner` (feature `iced`) are wiring stubs.
+//! The live rendering paths remain in `lib.rs`'s `run_egui_or_fallback` / `run_iced`
+//! methods. These stubs exist to provide a stable public trait surface; full delegation
+//! is planned for M6.
 
 use crate::{AppConfig, AppExit};
 use oxiui_core::UiError;

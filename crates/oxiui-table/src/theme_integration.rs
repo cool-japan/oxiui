@@ -1,14 +1,14 @@
 //! `oxiui-theme` integration for `oxiui-table`.
 //!
 //! Provides [`TableTheme`] — a colour token set derived from
-//! [`oxiui_theme::DesignTokens`] and [`oxiui_core::Palette`] that encodes the
+//! `oxiui_theme::DesignTokens` and `oxiui_core::Palette` that encodes the
 //! visual appearance of the table without coupling the core table logic to
 //! any specific renderer.
 //!
-//! Renderers (egui, iced, soft, wgpu) can call [`TableTheme::from_palette`]
-//! or [`TableTheme::from_tokens`] to obtain a backend-agnostic colour
-//! description, then map the `[u8; 4]` RGBA values to their native colour
-//! types.
+//! Renderers (egui, iced, soft, wgpu) can call `TableTheme::from_palette`
+//! or `TableTheme::from_tokens` (both require the `theme-table` feature) to
+//! obtain a backend-agnostic colour description, then map the `[u8; 4]` RGBA
+//! values to their native colour types.
 //!
 //! # Usage
 //!
@@ -23,7 +23,7 @@
 //!
 //! # Feature flag
 //!
-//! The [`TableTheme::from_palette`] and [`TableTheme::from_tokens`]
+//! The `TableTheme::from_palette` and `TableTheme::from_tokens`
 //! constructors are only available when the `theme-table` feature is enabled
 //! (which gates `oxiui-theme`).  The struct itself and the `Default` impl are
 //! always compiled so that downstream code does not need conditional
@@ -79,7 +79,7 @@ impl Default for TableTheme {
     ///
     /// These values are hard-coded so the struct is usable without the
     /// `theme-table` feature.  When the feature is enabled, prefer
-    /// [`TableTheme::from_palette`] to derive colours from the active theme.
+    /// `TableTheme::from_palette` to derive colours from the active theme.
     fn default() -> Self {
         Self {
             // Header: #24283B surface colour, fully opaque text.

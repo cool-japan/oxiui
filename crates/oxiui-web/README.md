@@ -1,38 +1,82 @@
-# oxiui-web — wasm32 / browser entry point for OxiUI
+# oxiui-web — wasm32 / browser entry-point template for OxiUI
 
-[![Crates.io](https://img.shields.io/crates/v/oxiui-web.svg)](https://crates.io/crates/oxiui-web)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`oxiui-web` is the web/WASM adapter for OxiUI. On the `wasm32` target it mounts an OxiUI app onto an HTML `<canvas>` element, driving the egui backend (`oxiui-egui`) through `eframe`'s `WebRunner` and rendering via WebGL/WebGPU. It exposes a small `wasm-bindgen` surface (`mount`, `JsWebHandle`, `JsMountOptions`) so the app can be controlled from JavaScript or TypeScript.
+`oxiui-web` is a **`publish = false` wasm32 entry-point crate**. On the `wasm32`
+target it is a `cdylib` that mounts an OxiUI app onto an HTML `<canvas>` element
+via [`wasm-bindgen`], driving the egui backend (`oxiui-egui`) through
+[`eframe`]'s `WebRunner`. It exposes a small `wasm-bindgen` surface (`mount`,
+`JsWebHandle`, `JsMountOptions`) so the app can be controlled from JavaScript or
+TypeScript.
 
-The crate is dual-target by design. The browser-specific dependencies (`wasm-bindgen`, `web-sys`, `eframe`, `egui`, `serde_json`) are gated behind `cfg(target_arch = "wasm32")` and never appear in native `[dependencies]`. On non-wasm targets the crate compiles to a thin stub whose `mount` functions return `Err(MountError::FeatureNotSupported)`, so `--all-features` native builds (and the OxiUI workspace's ffi-audit) succeed without pulling in any browser stack. Everything here is Pure Rust — no C/C++ system widgets, no native WebView. Note: this crate is marked `publish = false`; it is consumed through the [`oxiui`](../oxiui) facade's `web` feature and built with `wasm-pack`.
+The crate is dual-target by design. The browser-specific dependencies
+(`wasm-bindgen`, `web-sys`, `js-sys`, `eframe`, `egui`, `serde_json`) live in a
+`[target.'cfg(target_arch = "wasm32")'.dependencies]` table and never appear in
+native `[dependencies]`. On non-wasm targets the crate compiles to a thin stub
+whose `mount` / `mount_sync` functions return `Err(MountError::FeatureNotSupported)`,
+so native builds (and the OxiUI workspace's ffi-audit) succeed without pulling in
+any browser stack. Everything here is Pure Rust — no C/C++ system widgets, no
+native WebView.
 
-## Installation
+## Not a library dependency — copy this as a template
 
-This crate is built for the browser via [`wasm-pack`](https://rustwasm.github.io/wasm-pack/). Its `[lib]` declares `crate-type = ["cdylib", "rlib"]`.
+This crate is intentionally **unpublished** (`publish = false` in its
+`Cargo.toml`) and is **not** part of the [`oxiui`](../oxiui) facade. It is **not**
+meant to be consumed as a dependency from crates.io.
 
-```toml
-[dependencies]
-oxiui-web = "0.1.1"
-```
+Instead, **copy it as a template** for your own wasm app:
+
+1. Copy the `crates/oxiui-web/` directory into your project (or vendor `src/lib.rs`
+   and the `Cargo.toml` `[target.'cfg(...)']` dependency table).
+2. Adapt `src/lib.rs` — replace the placeholder `WasmApp` frame with your own
+   `content` closure / `UiCtx` calls.
+3. Adjust the feature flags to your needs (see below); drop the DOM modules you
+   do not use to shrink the wasm binary.
+4. Depend on the published OxiUI crates you actually need from crates.io
+   (`oxiui-core`, `oxiui-egui`, …) rather than on this template crate.
+
+## Building
+
+This crate is a wasm32 entry point: its `[lib]` declares
+`crate-type = ["cdylib", "rlib"]`. Build it for the
+`wasm32-unknown-unknown` target with your preferred wasm toolchain
+(e.g. [`wasm-pack`] or [`trunk`]):
 
 ```sh
-# Build the WASM bundle + JS glue into ./pkg
+# Produce the wasm binary + JS glue into ./pkg
 wasm-pack build --target web
+
+# …or build the wasm artifact directly:
+cargo build --target wasm32-unknown-unknown --release
 ```
 
-Most users do not depend on `oxiui-web` directly — they enable it through the facade:
+On any non-wasm target the crate still compiles (to the inert stub), which keeps
+`cargo build` / `cargo test` and the workspace ffi-audit green.
+
+## Feature flags
+
+The default set enables every optional DOM module so the template works out of
+the box. Disable defaults and opt in individually to trim the wasm binary:
+
+| Feature | Default | Effect |
+|---------|---------|--------|
+| `drag-drop` | on | Wire `dragenter` / `dragover` / `dragleave` / `drop` DOM listeners (`drag_drop` module). |
+| `service-worker` | on | Service-worker registration / unregistration helpers (`service_worker` module). |
+| `font-loading` | on | Load fonts via the CSS Font Loading API (`font_loading` module). |
+| `fullscreen` | on | Request / exit / query the Fullscreen API (`fullscreen` module). |
+| `web` | off | Generic marker feature for bundler-level tree-shaking experiments; no effect on the dependency set (that is selected by the `cfg(target_arch = "wasm32")` table). |
 
 ```toml
-[dependencies]
-oxiui = { version = "0.1.1", features = ["web"] }
+# Minimal wasm binary — opt into only what you need:
+oxiui-web = { path = "vendored/oxiui-web", default-features = false, features = ["fullscreen"] }
 ```
 
-## Quick Start
+## Quick start (after copying the template)
 
 ### JavaScript / TypeScript (wasm32)
 
-After `wasm-pack build --target web`, import the generated module and mount onto a `<canvas>`:
+After `wasm-pack build --target web`, import the generated module and mount onto
+a `<canvas>`:
 
 ```js
 import init, { mount } from './pkg/oxiui_web.js';
@@ -50,14 +94,19 @@ if (handle.is_running()) {
 
 ### Native stub (any non-wasm target)
 
+On non-wasm targets `mount` is a stub that always reports the unsupported target,
+so the same source compiles and tests everywhere:
+
 ```rust
 use oxiui_web::{mount, MountOptions, MountError};
 
-let result = mount("my-canvas", MountOptions::new());
-assert_eq!(result.unwrap_err(), MountError::FeatureNotSupported);
+match mount("my-canvas", MountOptions::new()) {
+    Err(MountError::FeatureNotSupported) => { /* expected off-wasm */ }
+    _ => unreachable!("native mount is always a stub"),
+}
 ```
 
-## API Overview
+## API overview
 
 ### Mount entry points
 
@@ -69,7 +118,8 @@ assert_eq!(result.unwrap_err(), MountError::FeatureNotSupported);
 
 ### `WebHandle`
 
-A handle to a mounted OxiUI web app. On wasm32 it is backed by a shared `egui::Context` slot populated on the first paint; on native it is inert.
+A handle to a mounted OxiUI web app. On wasm32 it is backed by a shared
+`egui::Context` slot populated on the first paint; on native it is inert.
 
 | Method | Description |
 |--------|-------------|
@@ -83,7 +133,9 @@ Also implements `Debug` and `Default` (`Default` == `new()`).
 
 ### `JsWebHandle` (wasm32 only)
 
-`#[wasm_bindgen]` wrapper around `WebHandle`, returned by `mount`. Exposes `stop()`, `resize(width, height)`, `inject_event(ev_json) -> Result<(), JsValue>`, and `is_running() -> bool` to JavaScript.
+`#[wasm_bindgen]` wrapper around `WebHandle`, returned by `mount`. Exposes
+`stop()`, `resize(width, height)`, `inject_event(ev_json) -> Result<(), JsValue>`,
+and `is_running() -> bool` to JavaScript.
 
 ### `MountOptions`
 
@@ -97,7 +149,8 @@ Builder-style configuration for the mount call. Derives `Default`, `Clone`, `Deb
 | `hidpi: Option<bool>` / `with_hidpi(bool)` | Enable HiDPI / Retina rendering. |
 | `MountOptions::new()` | All fields `None`. |
 
-A `#[wasm_bindgen]` builder `JsMountOptions` mirrors these setters for JS callers (wasm32 only).
+A `#[wasm_bindgen]` builder `JsMountOptions` mirrors these setters for JS callers
+(wasm32 only).
 
 ### `map_web_key`
 
@@ -105,17 +158,10 @@ A `#[wasm_bindgen]` builder `JsMountOptions` mirrors these setters for JS caller
 |----------|-------------|
 | `map_web_key(key: &str) -> oxiui_core::Key` | Maps a Web `KeyboardEvent.key` string to an `oxiui_core::Key`. Named keys (`"Enter"`, `"Tab"`, `" "` → `Space`, arrows, `Home`/`End`, `PageUp`/`PageDown`, `F1`–`F24`) map to their variants; single printable code points become `Key::Character`; any other multi-character name becomes `Key::Named` (forward-compatible escape hatch). |
 
-## Feature Flags
+## Errors — `MountError`
 
-| Feature | Default | Effect |
-|---------|---------|--------|
-| `web` | off | Reserved marker feature for browser integration. The browser dependency set is selected by the `cfg(target_arch = "wasm32")` target table rather than by this flag, so it has no effect on native builds. |
-
-## Errors
-
-### `MountError`
-
-A `Clone + Copy + Debug + PartialEq + Eq` enum (also `std::error::Error`, and converts to `JsValue` on wasm32 via its `Display` string).
+A `Clone + Copy + Debug + PartialEq + Eq` enum (also `std::error::Error`, and
+converts to `JsValue` on wasm32 via its `Display` string).
 
 | Variant | Discriminant | Meaning |
 |---------|--------------|---------|
@@ -123,22 +169,28 @@ A `Clone + Copy + Debug + PartialEq + Eq` enum (also `std::error::Error`, and co
 | `InitFailed` | `1` | The canvas was found but the runner could not be initialised. |
 | `FeatureNotSupported` | `2` | The operation is not supported on the current target (returned by every native stub). |
 
-The async wasm32 `mount` returns `Result<JsWebHandle, JsValue>`; DOM/eframe failures surface as descriptive `JsValue` strings (missing `window`/`document`, element is not a `<canvas>`, eframe/wgpu init failure), with `CanvasNotFound` converted into a `JsValue`.
+The async wasm32 `mount` returns `Result<JsWebHandle, JsValue>`; DOM/eframe
+failures surface as descriptive `JsValue` strings (missing `window`/`document`,
+element is not a `<canvas>`, eframe/wgpu init failure), with `CanvasNotFound`
+converted into a `JsValue`.
 
 ## Architecture
 
 On wasm32, `mount(canvas_id)`:
 
 1. Resolves the `<canvas>` element by `id` through `web_sys`.
-2. Starts an `eframe::WebRunner` on the canvas running a minimal `WasmApp` (an `eframe::App` bridge).
-3. Captures the live `egui::Context` into an `Arc<Mutex<Option<egui::Context>>>` shared with the returned `WebHandle`, so `resize()` and `inject_event()` can reach into the running event loop from outside.
+2. Starts an `eframe::WebRunner` on the canvas running a minimal `WasmApp` (an
+   `eframe::App` bridge — replace this with your own app when templating).
+3. Captures the live `egui::Context` into an `Arc<Mutex<Option<egui::Context>>>`
+   shared with the returned `WebHandle`, so `resize()` and `inject_event()` can
+   reach into the running event loop from outside.
 4. Returns a `JsWebHandle` for JavaScript control.
 
-## Related Crates
+## Related crates
 
 | Crate | Role |
 |-------|------|
-| [`oxiui`](../oxiui) | Facade crate; re-exports `mount` under `oxiui::web` with the `web` feature. |
+| [`oxiui`](../oxiui) | Facade crate. It does **not** depend on (or feature-gate) this template; on wasm32 `App::run` returns `Err(Unsupported)` pointing you at `oxiui_web::mount`. |
 | [`oxiui-core`](../oxiui-core) | Defines `Key`, `UiEvent` (deserialised by `inject_event`), and `serde` support. |
 | [`oxiui-egui`](../oxiui-egui) | egui adapter; provides `forward_event_to_egui` used to inject events into the live context. |
 | [`oxiui-render-wgpu`](../oxiui-render-wgpu) | wgpu render backend powering the browser canvas via WebGL/WebGPU. |
@@ -146,3 +198,8 @@ On wasm32, `mount(canvas_id)`:
 ## License
 
 Apache-2.0 — COOLJAPAN OU (Team Kitasan)
+
+[`wasm-bindgen`]: https://rustwasm.github.io/wasm-bindgen/
+[`wasm-pack`]: https://rustwasm.github.io/wasm-pack/
+[`trunk`]: https://trunkrs.dev/
+[`eframe`]: https://crates.io/crates/eframe

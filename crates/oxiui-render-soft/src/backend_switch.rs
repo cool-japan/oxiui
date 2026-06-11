@@ -55,26 +55,26 @@ pub enum BackendKind {
 
 /// A runtime-polymorphic render backend that implements [`RenderBackend`].
 ///
-/// Wraps either [`SoftBackend`] or [`WgpuBackend`] and forwards all
-/// [`RenderBackend`] method calls to the active variant.  The CPU and GPU
-/// paths share the same [`DrawList`] command format (defined in
-/// [`oxiui_core`]), so callers do not need to change anything when the active
+/// Wraps either [`SoftBackend`] or `WgpuBackend` (behind `wgpu-compat` feature)
+/// and forwards all [`RenderBackend`] method calls to the active variant.
+/// The CPU and GPU paths share the same [`DrawList`] command format (defined in
+/// `oxiui_core`), so callers do not need to change anything when the active
 /// backend changes.
 ///
 /// Construct via [`DynBackend::soft`] or — when the `wgpu-compat` feature is
-/// active — via [`DynBackend::wgpu`].
+/// active — via `DynBackend::wgpu`.
 pub enum DynBackend {
     /// CPU software rasteriser.
-    Soft(SoftBackend),
+    Soft(Box<SoftBackend>),
     /// wgpu GPU rasteriser.
     #[cfg(feature = "wgpu-compat")]
-    Wgpu(WgpuBackend),
+    Wgpu(Box<WgpuBackend>),
 }
 
 impl DynBackend {
     /// Wrap a [`SoftBackend`] as the CPU path.
     pub fn soft(width: u32, height: u32) -> Self {
-        DynBackend::Soft(SoftBackend::new(width, height))
+        DynBackend::Soft(Box::new(SoftBackend::new(width, height)))
     }
 
     /// Wrap a [`WgpuBackend`] as the GPU path.
@@ -82,7 +82,7 @@ impl DynBackend {
     /// Only available when the `wgpu-compat` feature is enabled.
     #[cfg(feature = "wgpu-compat")]
     pub fn wgpu(backend: WgpuBackend) -> Self {
-        DynBackend::Wgpu(backend)
+        DynBackend::Wgpu(Box::new(backend))
     }
 
     /// Return the active [`BackendKind`].
@@ -108,7 +108,7 @@ impl DynBackend {
     /// Borrow the inner [`SoftBackend`], or `None` if the GPU path is active.
     pub fn as_soft(&self) -> Option<&SoftBackend> {
         match self {
-            DynBackend::Soft(b) => Some(b),
+            DynBackend::Soft(b) => Some(b.as_ref()),
             #[cfg(feature = "wgpu-compat")]
             _ => None,
         }
@@ -117,7 +117,7 @@ impl DynBackend {
     /// Mutably borrow the inner [`SoftBackend`], or `None` if the GPU path is active.
     pub fn as_soft_mut(&mut self) -> Option<&mut SoftBackend> {
         match self {
-            DynBackend::Soft(b) => Some(b),
+            DynBackend::Soft(b) => Some(b.as_mut()),
             #[cfg(feature = "wgpu-compat")]
             _ => None,
         }

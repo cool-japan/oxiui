@@ -1144,7 +1144,7 @@ impl Default for StatefulEguiAdapter {
 /// This module is only compiled when the `a11y` Cargo feature is enabled:
 /// ```toml
 /// [dependencies]
-/// oxiui-egui = { version = "0.1.1", features = ["a11y"] }
+/// oxiui-egui = { version = "0.1.2", features = ["a11y"] }
 /// ```
 ///
 /// # Usage
@@ -1267,7 +1267,7 @@ pub mod a11y {
 /// Only compiled when the `table` Cargo feature is enabled:
 /// ```toml
 /// [dependencies]
-/// oxiui-egui = { version = "0.1.1", features = ["table"] }
+/// oxiui-egui = { version = "0.1.2", features = ["table"] }
 /// ```
 #[cfg(feature = "table")]
 pub mod table_bridge {

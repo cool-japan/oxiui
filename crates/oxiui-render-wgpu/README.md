@@ -11,7 +11,7 @@
 
 ```toml
 [dependencies]
-oxiui-render-wgpu = "0.1.1"
+oxiui-render-wgpu = "0.1.2"
 ```
 
 ## Quick Start

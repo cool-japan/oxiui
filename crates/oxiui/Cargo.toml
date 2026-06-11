@@ -12,7 +12,7 @@ keywords = ["gui", "egui", "wgpu", "cooljapan", "pure-rust"]
 
 [features]
 gpu      = ["dep:oxiui-render-wgpu"]
-software = ["dep:oxiui-render-soft"]
+software = ["dep:oxiui-render-soft", "dep:png"]
 egui     = ["dep:oxiui-egui", "dep:oxiui-render-wgpu", "dep:egui", "dep:eframe", "dep:png"]
 iced     = ["dep:oxiui-iced", "dep:iced"]
 table    = ["dep:oxiui-table"]

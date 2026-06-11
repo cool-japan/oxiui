@@ -44,6 +44,11 @@ use crate::gpu::pipeline::{
     BlurPipeline, CompositePipeline, GradientPipeline, SolidPipeline, TexturedPipeline,
 };
 
+#[cfg(feature = "text")]
+use crate::text_bridge::TextBridge;
+#[cfg(feature = "text")]
+use oxiui_text::TextPipeline;
+
 // ── WgpuBackend ───────────────────────────────────────────────────────────────
 
 /// Headless GPU backend implementing [`RenderBackend`].
@@ -68,6 +73,12 @@ pub struct WgpuBackend {
     solid_vertex_buf: Option<wgpu::Buffer>,
     /// Byte capacity of `solid_vertex_buf`.
     solid_vertex_buf_capacity: usize,
+    /// Lazily-initialised CPU text bridge for pre-expanding `DrawText` commands
+    /// into per-glyph `Image` blits.  `None` until the first `DrawText` command
+    /// is encountered or until a bridge is successfully initialised.  Requires
+    /// the `text` Cargo feature.
+    #[cfg(feature = "text")]
+    text_bridge: Option<TextBridge>,
 }
 
 impl WgpuBackend {
@@ -133,6 +144,8 @@ impl WgpuBackend {
             last_frame_stats: FrameStats::default(),
             solid_vertex_buf: None,
             solid_vertex_buf_capacity: 0,
+            #[cfg(feature = "text")]
+            text_bridge: None,
         })
     }
 
@@ -337,6 +350,12 @@ impl RenderBackend for WgpuBackend {
         true
     }
 
+    fn supports_text(&self) -> bool {
+        // Text is supported when the `text` feature is enabled; the bridge is
+        // initialised lazily on first use.
+        cfg!(feature = "text")
+    }
+
     fn execute(&mut self, list: &DrawList) -> Result<(), UiError> {
         // Reset per-frame stats at the start of each execute().
         self.last_frame_stats = FrameStats::default();
@@ -346,6 +365,52 @@ impl RenderBackend for WgpuBackend {
         self.ctx
             .queue
             .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
+
+        // ── Text pre-expansion ────────────────────────────────────────────────
+        // When the `text` feature is enabled, expand any `DrawText` commands
+        // into per-glyph `Image` blits *before* geometry building so that
+        // `build_geometry` sees only `Image`/`NineSlice` commands for text.
+        //
+        // The bridge is lazily initialised on the first frame that contains
+        // a `DrawText` command, using the first available system font family.
+        // If no system font is found the bridge stays `None` and `DrawText`
+        // commands are silently skipped (same behaviour as before).
+        #[cfg(feature = "text")]
+        let expanded_list: DrawList;
+        #[cfg(feature = "text")]
+        let list: &DrawList = {
+            use oxiui_core::paint::DrawCommand;
+            let has_text = list
+                .iter()
+                .any(|c| matches!(c, DrawCommand::DrawText { .. }));
+            if has_text {
+                // Lazily initialise the bridge from a system font.
+                if self.text_bridge.is_none() {
+                    // Try common system font families in order.
+                    let candidates = &[
+                        "Helvetica",
+                        "Arial",
+                        "DejaVu Sans",
+                        "Liberation Sans",
+                        "sans-serif",
+                    ];
+                    for &family in candidates {
+                        if let Ok(pipeline) = TextPipeline::from_system_font(family) {
+                            self.text_bridge = Some(TextBridge::new(pipeline, 1024));
+                            break;
+                        }
+                    }
+                }
+                if let Some(bridge) = &mut self.text_bridge {
+                    expanded_list = bridge.expand_draw_text_commands(list);
+                    &expanded_list
+                } else {
+                    list
+                }
+            } else {
+                list
+            }
+        };
 
         let (verts, segments, gradient_draws, textured_draws, _backdrop_blur_draws) =
             build_geometry(list, self.ctx.width, self.ctx.height);

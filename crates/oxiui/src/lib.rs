@@ -72,8 +72,9 @@ pub use oxiui_core::{ButtonResponse, Color, FontSpec, Palette, Theme, UiCtx, UiE
 
 /// Pluggable backend runner infrastructure.
 ///
-/// Provides the [`BackendRunner`] trait and its built-in implementations
-/// ([`EguiRunner`], `IcedRunner`) for wiring custom backend dispatchers.
+/// Provides the `BackendRunner` trait and its built-in implementations
+/// (`EguiRunner` behind `egui` feature, `IcedRunner` behind `iced` feature)
+/// for wiring custom backend dispatchers.
 pub mod runner;
 
 /// Multi-window support.
@@ -257,6 +258,18 @@ pub mod reactive {
     pub use oxiui_core::{Computed, ReactiveError, ReactiveRuntime, Signal};
 }
 
+/// Window configuration builder.
+pub mod app_config;
+pub use app_config::AppConfig;
+
+/// In-app toast notification queue.
+pub mod notification;
+pub use notification::{Notification, NotificationQueue};
+
+/// Searchable command palette.
+pub mod command;
+pub use command::{Command, CommandPalette};
+
 /// Available GUI backend choices for [`App`].
 ///
 /// The default backend is [`Backend::Egui`]. Select `Backend::Iced` (requires
@@ -324,165 +337,6 @@ impl std::fmt::Display for HotkeyConflict {
 }
 
 impl std::error::Error for HotkeyConflict {}
-
-/// Configuration for building an [`App`].
-///
-/// Use the builder methods to configure the window, then pass to [`App::new`].
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use oxiui::AppConfig;
-/// let config = AppConfig::new()
-///     .title("My App")
-///     .size(1024.0, 768.0)
-///     .resizable(true)
-///     .decorations(true)
-///     .transparent(false);
-/// ```
-#[derive(Debug, Clone)]
-pub struct AppConfig {
-    /// Window title.
-    pub title: String,
-    /// Initial window width in logical pixels (0.0 → use default).
-    pub width: f32,
-    /// Initial window height in logical pixels (0.0 → use default).
-    pub height: f32,
-    /// Whether the window can be resized by the user.
-    pub resizable: bool,
-    /// Minimum window size in logical pixels `(width, height)`.
-    pub min_size: Option<(f32, f32)>,
-    /// Maximum window size in logical pixels `(width, height)`.
-    pub max_size: Option<(f32, f32)>,
-    /// Whether the window has OS-drawn decorations (title bar, borders).
-    ///
-    /// Defaults to `true`.
-    pub decorations: bool,
-    /// Whether the window background is transparent.
-    ///
-    /// Defaults to `false`.
-    pub transparent: bool,
-    /// Whether the window is always shown above other windows.
-    ///
-    /// Defaults to `false`.
-    pub always_on_top: bool,
-    /// Optional PNG/ICO bytes for the window icon.
-    ///
-    /// Stored as raw bytes; decoded to RGBA when wiring into egui's
-    /// `ViewportBuilder::with_icon`. Requires the `png` crate (present in
-    /// `oxiui-render-soft`) — currently decoded via a small inline helper when
-    /// the `software` feature is enabled. Without `software`, the icon bytes
-    /// are stored but decoding is deferred (see deviation note in TODO.md).
-    pub icon: Option<Vec<u8>>,
-    /// Initial window position in logical pixels `(x, y)` from the top-left
-    /// of the primary monitor.
-    pub position: Option<(f32, f32)>,
-    /// Extra font families to load at startup.
-    ///
-    /// Each entry is `(family_name, raw_font_bytes)`. Passed to the active
-    /// backend's font loading path when [`App::run`] begins (egui path only
-    /// in this release; iced font loading is deferred).
-    pub extra_fonts: Vec<(String, Vec<u8>)>,
-    /// Optional design-token override (spacing / radius / elevation scales).
-    ///
-    /// When `None`, backends use the theme's default tokens. Set via
-    /// [`App::with_design_tokens`].
-    pub design_tokens: Option<oxiui_theme::DesignTokens>,
-    /// Optional typography-scale override.
-    ///
-    /// When `None`, backends use the theme's default scale. Set via
-    /// [`App::with_typography`].
-    pub typography: Option<oxiui_theme::TypographyScale>,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AppConfig {
-    /// Create a new [`AppConfig`] with default settings.
-    pub fn new() -> Self {
-        Self {
-            title: String::new(),
-            width: 800.0,
-            height: 600.0,
-            resizable: true,
-            min_size: None,
-            max_size: None,
-            decorations: true,
-            transparent: false,
-            always_on_top: false,
-            icon: None,
-            position: None,
-            extra_fonts: Vec::new(),
-            design_tokens: None,
-            typography: None,
-        }
-    }
-
-    /// Set the window title.
-    pub fn title(mut self, t: impl Into<String>) -> Self {
-        self.title = t.into();
-        self
-    }
-
-    /// Set the initial window size in logical pixels.
-    pub fn size(mut self, w: f32, h: f32) -> Self {
-        self.width = w;
-        self.height = h;
-        self
-    }
-
-    /// Set whether the window can be resized.
-    pub fn resizable(mut self, r: bool) -> Self {
-        self.resizable = r;
-        self
-    }
-
-    /// Set the minimum window size in logical pixels.
-    pub fn min_size(mut self, w: f32, h: f32) -> Self {
-        self.min_size = Some((w, h));
-        self
-    }
-
-    /// Set the maximum window size in logical pixels.
-    pub fn max_size(mut self, w: f32, h: f32) -> Self {
-        self.max_size = Some((w, h));
-        self
-    }
-
-    /// Set whether the window has OS-drawn decorations (title bar, borders).
-    pub fn decorations(mut self, d: bool) -> Self {
-        self.decorations = d;
-        self
-    }
-
-    /// Set whether the window background is transparent.
-    pub fn transparent(mut self, t: bool) -> Self {
-        self.transparent = t;
-        self
-    }
-
-    /// Set whether the window is always shown above other windows.
-    pub fn always_on_top(mut self, a: bool) -> Self {
-        self.always_on_top = a;
-        self
-    }
-
-    /// Set the window icon from raw PNG/ICO bytes.
-    pub fn icon(mut self, bytes: Vec<u8>) -> Self {
-        self.icon = Some(bytes);
-        self
-    }
-
-    /// Set the initial window position in logical pixels from top-left of primary monitor.
-    pub fn position(mut self, x: f32, y: f32) -> Self {
-        self.position = Some((x, y));
-        self
-    }
-}
 
 /// Boxed content closure type for an OxiUI app frame.
 type ContentFn = Box<dyn FnMut(&mut dyn oxiui_core::UiCtx) + Send>;
@@ -601,192 +455,6 @@ impl HotkeyRegistry {
 }
 
 impl Default for HotkeyRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ─── Command palette ─────────────────────────────────────────────────────────
-
-/// A named, searchable command.
-pub struct Command {
-    /// Unique identifier.
-    pub id: String,
-    /// Display label shown in the palette.
-    pub label: String,
-    /// Optional keyboard shortcut hint displayed alongside the label.
-    pub shortcut: Option<String>,
-    /// Action to invoke when the command is selected.
-    pub action: Box<dyn Fn() + Send + Sync>,
-}
-
-/// A searchable registry of [`Command`]s.
-///
-/// Commands are registered via [`CommandPalette::register`] and searched
-/// via [`CommandPalette::search`] using a simple fuzzy-match algorithm
-/// (all query characters must appear in the label in order, case-insensitive).
-pub struct CommandPalette {
-    commands: Vec<Command>,
-}
-
-impl CommandPalette {
-    /// Create an empty [`CommandPalette`].
-    pub fn new() -> Self {
-        Self {
-            commands: Vec::new(),
-        }
-    }
-
-    /// Register a command.
-    pub fn register(
-        &mut self,
-        id: impl Into<String>,
-        label: impl Into<String>,
-        action: impl Fn() + Send + Sync + 'static,
-    ) {
-        self.commands.push(Command {
-            id: id.into(),
-            label: label.into(),
-            shortcut: None,
-            action: Box::new(action),
-        });
-    }
-
-    /// Register a command with an optional keyboard shortcut hint.
-    pub fn register_with_shortcut(
-        &mut self,
-        id: impl Into<String>,
-        label: impl Into<String>,
-        shortcut: Option<String>,
-        action: impl Fn() + Send + Sync + 'static,
-    ) {
-        self.commands.push(Command {
-            id: id.into(),
-            label: label.into(),
-            shortcut,
-            action: Box::new(action),
-        });
-    }
-
-    /// Search for commands whose labels fuzzy-match `query`.
-    ///
-    /// The match is case-insensitive and requires that every character in
-    /// `query` appear in `label` in order (subsequence matching).
-    pub fn search(&self, query: &str) -> Vec<&Command> {
-        let query_lc = query.to_lowercase();
-        self.commands
-            .iter()
-            .filter(|cmd| {
-                let label_lc = cmd.label.to_lowercase();
-                let mut q_iter = query_lc.chars();
-                let mut current = q_iter.next();
-                for ch in label_lc.chars() {
-                    if current == Some(ch) {
-                        current = q_iter.next();
-                    }
-                    if current.is_none() {
-                        return true;
-                    }
-                }
-                current.is_none()
-            })
-            .collect()
-    }
-
-    /// The number of registered commands.
-    pub fn len(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Returns `true` if no commands are registered.
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-}
-
-impl Default for CommandPalette {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ─── Notification queue ───────────────────────────────────────────────────────
-
-/// A pending in-app toast notification.
-#[derive(Debug, Clone)]
-pub struct Notification {
-    /// Short title line.
-    pub title: String,
-    /// Longer body text.
-    pub body: String,
-    /// How long the notification should be displayed, in milliseconds.
-    pub duration_ms: u64,
-    /// Urgency level: 0 = low, 1 = normal, 2 = critical.
-    pub urgency: u8,
-    /// When the notification was created.
-    pub created_at: std::time::Instant,
-}
-
-/// A FIFO queue of pending [`Notification`]s.
-///
-/// Call [`NotificationQueue::push`] to enqueue notifications, and
-/// [`NotificationQueue::pop_due`] each frame to drain them for display.
-pub struct NotificationQueue {
-    pending: std::collections::VecDeque<Notification>,
-}
-
-impl NotificationQueue {
-    /// Create an empty [`NotificationQueue`].
-    pub fn new() -> Self {
-        Self {
-            pending: std::collections::VecDeque::new(),
-        }
-    }
-
-    /// Enqueue a notification.
-    pub fn push(&mut self, title: impl Into<String>, body: impl Into<String>, duration_ms: u64) {
-        self.pending.push_back(Notification {
-            title: title.into(),
-            body: body.into(),
-            duration_ms,
-            urgency: 1,
-            created_at: std::time::Instant::now(),
-        });
-    }
-
-    /// Enqueue a notification with explicit urgency (0=low, 1=normal, 2=critical).
-    pub fn enqueue(&mut self, title: impl Into<String>, body: impl Into<String>, urgency: u8) {
-        let duration_ms = match urgency {
-            0 => 3_000,
-            2 => 10_000,
-            _ => 5_000,
-        };
-        self.pending.push_back(Notification {
-            title: title.into(),
-            body: body.into(),
-            duration_ms,
-            urgency,
-            created_at: std::time::Instant::now(),
-        });
-    }
-
-    /// Dequeue the next pending notification, if any.
-    pub fn pop_due(&mut self) -> Option<Notification> {
-        self.pending.pop_front()
-    }
-
-    /// Returns `true` if no notifications are pending.
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
-
-    /// The number of pending notifications.
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-}
-
-impl Default for NotificationQueue {
     fn default() -> Self {
         Self::new()
     }
@@ -974,7 +642,7 @@ impl App {
     /// Enable or disable frame skipping in the egui backend.
     ///
     /// When `enabled` is `true`, the egui backend will call
-    /// [`egui::Context::request_repaint_after`] with a 1-second delay whenever
+    /// `egui::Context::request_repaint_after` with a 1-second delay whenever
     /// no input events occurred in that frame, yielding CPU time. This is a
     /// conservative "dirty flag" optimisation for apps that animate infrequently.
     ///

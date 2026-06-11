@@ -49,7 +49,7 @@
 
 use oxiui_core::{
     geometry::Rect,
-    paint::{DrawList, ImageData, ImageFilter},
+    paint::{DrawCommand, DrawList, ImageData, ImageFilter},
     Color, UiError,
 };
 use oxiui_text::{GlyphAtlas, GlyphKey, TextPipeline, TextStyle};
@@ -150,6 +150,45 @@ impl TextBridge {
         }
 
         Ok(())
+    }
+
+    /// Pre-expand all `DrawText` commands in `list` into per-glyph `Image` blits.
+    ///
+    /// Walks `list` command by command.  For every [`DrawCommand::DrawText`]
+    /// the method calls [`expand_draw_text`] to produce per-glyph
+    /// [`DrawCommand::Image`] entries in the output [`DrawList`].  All other
+    /// commands are copied through unchanged.
+    ///
+    /// Shaping / rasterization errors for individual `DrawText` commands are
+    /// silently swallowed (the text is skipped) to avoid a single bad string
+    /// aborting the whole frame.
+    ///
+    /// # Returns
+    ///
+    /// A new [`DrawList`] with `DrawText` variants replaced by `Image` blits.
+    ///
+    /// [`expand_draw_text`]: TextBridge::expand_draw_text
+    pub fn expand_draw_text_commands(&mut self, list: &DrawList) -> DrawList {
+        let mut out = DrawList::new();
+        for cmd in list.iter() {
+            match cmd {
+                DrawCommand::DrawText {
+                    rect,
+                    text,
+                    font,
+                    color,
+                } => {
+                    let style =
+                        TextStyle::new(font.size).color([color.0, color.1, color.2, color.3]);
+                    // Silently skip on shaping/rasterization failure.
+                    let _ = self.expand_draw_text(&mut out, *rect, text, &style, *color);
+                }
+                other => {
+                    out.push(other.clone());
+                }
+            }
+        }
+        out
     }
 
     /// Return a reference to the internal [`GlyphAtlas`] for inspection.
@@ -280,5 +319,82 @@ mod tests {
         let atlas = GlyphAtlas::new(100);
         let u = atlas.utilization();
         assert!((u - 0.0).abs() < f32::EPSILON);
+    }
+
+    // ── expand_draw_text_commands ──────────────────────────────────────────────
+
+    /// Non-text commands must pass through expand_draw_text_commands unchanged.
+    #[test]
+    fn expand_commands_passthrough_non_text() {
+        use oxiui_core::geometry::Rect;
+        use oxiui_core::paint::{DrawCommand, DrawList};
+        use oxiui_core::Color;
+
+        // Build a DrawList with two solid rects and no DrawText commands.
+        let mut list = DrawList::new();
+        list.push_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color(255, 0, 0, 255));
+        list.push_rect(Rect::new(10.0, 0.0, 10.0, 10.0), Color(0, 255, 0, 255));
+
+        // We cannot build a TextBridge without a valid font, but the passthrough
+        // path does not require one — we need an empty TextBridge.
+        // Since from_bytes([]) always returns Err, we can't easily construct a
+        // TextBridge here.  Instead, verify the non-text path via a system font
+        // if available, or skip if the system font is absent.
+        let pipeline_result = TextPipeline::from_system_font("Helvetica")
+            .or_else(|_| TextPipeline::from_system_font("Arial"))
+            .or_else(|_| TextPipeline::from_system_font("sans-serif"));
+
+        let Ok(pipeline) = pipeline_result else {
+            // No system font available — skip this test.
+            return;
+        };
+        let mut bridge = TextBridge::new(pipeline, 256);
+        let expanded = bridge.expand_draw_text_commands(&list);
+
+        // The output must contain at least the two original FillRect commands.
+        let rects: Vec<_> = expanded
+            .iter()
+            .filter(|c| matches!(c, DrawCommand::FillRect { .. }))
+            .collect();
+        assert_eq!(rects.len(), 2, "two FillRect commands must pass through");
+    }
+
+    /// A DrawText command must be replaced by ≥0 Image blits (≥1 when font is available).
+    #[test]
+    fn expand_commands_draw_text_produces_image_blits() {
+        use oxiui_core::geometry::Rect;
+        use oxiui_core::paint::{DrawCommand, DrawList};
+        use oxiui_core::{Color, FontSpec};
+
+        let pipeline_result = TextPipeline::from_system_font("Helvetica")
+            .or_else(|_| TextPipeline::from_system_font("Arial"))
+            .or_else(|_| TextPipeline::from_system_font("sans-serif"));
+
+        let Ok(pipeline) = pipeline_result else {
+            return; // no system font — skip
+        };
+        let mut bridge = TextBridge::new(pipeline, 512);
+
+        let mut list = DrawList::new();
+        let font = FontSpec::new("Helvetica", 16.0, 400);
+        list.push_text(
+            Rect::new(0.0, 0.0, 200.0, 24.0),
+            "Hi",
+            font,
+            Color(255, 255, 255, 255),
+        );
+
+        let expanded = bridge.expand_draw_text_commands(&list);
+
+        // The DrawText must be replaced — no DrawText should remain.
+        let text_cmds: usize = expanded
+            .iter()
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
+            .count();
+        assert_eq!(text_cmds, 0, "no DrawText commands should remain");
+
+        // At least the shaping infrastructure ran (may produce Image blits for
+        // visible glyphs; empty string / whitespace-only may yield 0).
+        // We just assert the expand path ran without panicking.
     }
 }

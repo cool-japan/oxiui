@@ -414,7 +414,12 @@ pub(crate) fn build_geometry(list: &DrawList, viewport_w: u32, viewport_h: u32) 
             // SetBlendMode, BoxShadow: BoxShadow is handled by shadow::collect_shadows;
             // SetBlendMode is informational for now (blend mode plumbing is
             // handled by BlendPipelineSet in the renderer).
-            // DrawText: deferred (requires glyph atlas / oxiui-text).
+            //
+            // DrawText: when the `text` feature is enabled, `DrawText` commands
+            // are pre-expanded into `DrawCommand::Image` blits by
+            // `TextBridge::expand_draw_text_commands` in `renderer.rs` *before*
+            // `build_geometry` is called.  Any residual `DrawText` that reaches
+            // here (e.g. when `text` feature is disabled) is silently skipped.
             _ => {}
         }
     }
@@ -707,4 +712,98 @@ pub(crate) fn build_gradient_uniforms(
         stop_offsets,
         stop_colors,
     })
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxiui_core::geometry::Rect;
+    use oxiui_core::paint::{DrawList, ImageData, ImageFilter};
+    use oxiui_core::Color;
+
+    /// A solid rect produces exactly 6 vertices (2 triangles × 3 vertices).
+    #[test]
+    fn solid_rect_produces_6_vertices() {
+        let mut list = DrawList::new();
+        list.push_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color(255, 0, 0, 255));
+        let (verts, segments, grads, textures, _blurs) = build_geometry(&list, 100, 100);
+        assert_eq!(verts.len(), 6, "one rect = 6 vertices");
+        assert_eq!(segments.len(), 1, "one draw segment");
+        assert!(grads.is_empty());
+        assert!(textures.is_empty());
+    }
+
+    /// N solid rects produce N×6 vertices in a single draw segment.
+    #[test]
+    fn n_solid_rects_produce_n_times_6_vertices() {
+        const N: usize = 5;
+        let mut list = DrawList::new();
+        for i in 0..N {
+            list.push_rect(
+                Rect::new(i as f32 * 12.0, 0.0, 10.0, 10.0),
+                Color(255, 0, 0, 255),
+            );
+        }
+        let (verts, segments, _, _, _) = build_geometry(&list, 200, 100);
+        assert_eq!(verts.len(), N * 6, "{N} rects = {} vertices", N * 6);
+        assert_eq!(segments.len(), 1, "all in one draw segment");
+    }
+
+    /// An image command produces one TexturedDraw with 6 vertices (2 triangles).
+    #[test]
+    fn image_produces_one_textured_draw_with_6_vertices() {
+        let mut list = DrawList::new();
+        list.push_image(
+            ImageData::new(vec![255, 0, 0, 255], 1, 1),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            ImageFilter::Nearest,
+        );
+        let (_verts, _segs, _grads, textures, _blurs) = build_geometry(&list, 100, 100);
+        assert_eq!(textures.len(), 1, "one textured draw");
+        // push_textured_quad emits 6 vertices (quad = 2 triangles)
+        assert_eq!(textures[0].verts.len(), 6, "2 triangles = 6 vertices");
+    }
+
+    /// Clip push/pop correctly produces 3 draw segments (before/inside/after clip).
+    #[test]
+    fn clip_pushpop_produces_correct_segments() {
+        let mut list = DrawList::new();
+        // Rect before clip.
+        list.push_rect(Rect::new(0.0, 0.0, 5.0, 5.0), Color(255, 0, 0, 255));
+        // Push a clip, draw inside, pop clip.
+        list.push_clip(Rect::new(0.0, 0.0, 50.0, 50.0));
+        list.push_rect(Rect::new(1.0, 1.0, 4.0, 4.0), Color(0, 255, 0, 255));
+        list.pop_clip();
+        // Rect after clip.
+        list.push_rect(Rect::new(10.0, 0.0, 5.0, 5.0), Color(0, 0, 255, 255));
+
+        let (verts, segments, _, _, _) = build_geometry(&list, 100, 100);
+        // 3 rects × 6 vertices each = 18 total solid vertices.
+        assert_eq!(verts.len(), 18, "3 rects = 18 vertices");
+        // Three distinct segments: pre-clip, clipped, post-clip.
+        assert_eq!(segments.len(), 3, "three draw segments for push/pop clip");
+    }
+
+    /// Scissor culling drops rects outside the scissor rect.
+    #[test]
+    fn scissor_culls_offscreen_rects() {
+        let mut list = DrawList::new();
+        // Small scissor region: 10×10 at origin.
+        list.push_clip(Rect::new(0.0, 0.0, 10.0, 10.0));
+        // Inside rect: should NOT be culled.
+        list.push_rect(Rect::new(0.0, 0.0, 5.0, 5.0), Color(255, 0, 0, 255));
+        // Completely outside: should be culled.
+        list.push_rect(Rect::new(100.0, 100.0, 5.0, 5.0), Color(0, 255, 0, 255));
+        list.pop_clip();
+
+        let (verts, _, _, _, _) = build_geometry(&list, 200, 200);
+        // Only the inside rect's 6 vertices should be emitted.
+        assert_eq!(
+            verts.len(),
+            6,
+            "outside rect must be culled; only 6 vertices expected"
+        );
+    }
 }

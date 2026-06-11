@@ -66,7 +66,7 @@
 //! | [`wgsl`]    | WGSL preprocessor, validation, and built-in compute kernels |
 //! | [`dispatch`] | [`Dispatcher`] — high-level GPU compute helpers |
 //! | [`integration`] | Bridges to `oxiui-render-soft`, `oxiui-render-wgpu`, `oxiui-text` |
-//! | [`hot_reload`] | WGSL hot-reload via `notify` (behind the `hot-reload` feature) |
+//! | `hot_reload` | WGSL hot-reload via `notify` (behind the `hot-reload` feature) |
 //!
 //! ## Dependency re-exports
 //!
@@ -79,7 +79,7 @@
 //! | Feature | Description |
 //! |---------|-------------|
 //! | `tracing` | Adds `#[tracing::instrument]` spans to key functions for span-based profiling. |
-//! | `hot-reload` | Adds [`hot_reload::ShaderWatcher`] for live WGSL file watching via `notify`. |
+//! | `hot-reload` | Adds `hot_reload::ShaderWatcher` for live WGSL file watching via `notify`. |
 
 pub mod buffer;
 pub mod context;

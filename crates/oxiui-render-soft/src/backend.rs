@@ -26,7 +26,7 @@ use crate::{AaMode, ShadowQuality, SoftRenderQuality};
 /// (clip-correct). All commands share one clip stack for the duration of
 /// the [`oxiui_core::paint::RenderBackend::execute`] call.
 ///
-/// When the `text` feature is enabled, a cached [`oxiui_text::TextPipeline`]
+/// When the `text` feature is enabled, a cached `oxiui_text::TextPipeline`
 /// is held on the backend so that `DrawText` commands are fully shaped and
 /// rasterised rather than silently ignored.
 pub struct SoftBackend {
@@ -399,6 +399,7 @@ fn draw_text_to_fb(
 /// `pixels` is row-major greyscale: one byte per pixel, 0 = transparent,
 /// 255 = fully opaque.  Out-of-bounds pixels and pixels outside `clip` are
 /// silently skipped.  The framebuffer stays in straight-alpha `0xAARRGGBB`.
+#[cfg(feature = "text")]
 #[allow(clippy::too_many_arguments)]
 fn blit_glyph_clipped(
     fb: &mut Framebuffer,
@@ -677,8 +678,11 @@ fn dispatch_command(
 mod tests {
     use super::*;
     use crate::framebuffer::Framebuffer;
+    #[cfg(feature = "text")]
     use oxiui_core::paint::DrawList;
-    use oxiui_core::{geometry::Rect, Color, FontSpec};
+    use oxiui_core::Color;
+    #[cfg(feature = "text")]
+    use oxiui_core::{geometry::Rect, FontSpec};
 
     /// Test 1: blit an 8×8 all-255 alpha bitmap, verify framebuffer pixel at
     /// (0,0) matches the text colour.
@@ -951,6 +955,7 @@ mod tests {
 
     /// blit_glyph_clipped with a clip that excludes the glyph entirely →
     /// no pixels changed.
+    #[cfg(feature = "text")]
     #[test]
     fn blit_glyph_clipped_excludes_fully() {
         let mut fb = Framebuffer::with_fill(10, 10, Color(0, 0, 0, 255));
@@ -978,6 +983,7 @@ mod tests {
     }
 
     /// blit_glyph_clipped with a full-fb clip paints all glyph pixels.
+    #[cfg(feature = "text")]
     #[test]
     fn blit_glyph_clipped_full_clip_paints() {
         let mut fb = Framebuffer::new(4, 4);

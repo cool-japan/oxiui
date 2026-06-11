@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/oxiui.svg)](https://crates.io/crates/oxiui)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`oxiui` is the top-level façade crate for OxiUI — the COOLJAPAN Pure-Rust UI layer with **no GTK (C), no Qt (C++), no SDL (C), no system widgets, and no raw AppKit / Win32 / Cocoa bindings**. It wraps the immediate-mode widget API from `oxiui-core`, selects a render + framework backend through Cargo features, and re-exports everything an application needs behind one builder: [`App`]. By default it boots an egui application rendered via wgpu; alternative backends (iced, Slint, Dioxus, software, web/WASM) are opt-in.
+`oxiui` is the top-level façade crate for OxiUI — the COOLJAPAN Pure-Rust UI layer with **no GTK (C), no Qt (C++), no SDL (C), no system widgets, and no raw AppKit / Win32 / Cocoa bindings**. It wraps the immediate-mode widget API from `oxiui-core`, selects a render + framework backend through Cargo features, and re-exports everything an application needs behind one builder: [`App`]. By default it boots an egui application rendered via wgpu; alternative backends (iced, Slint, Dioxus, software) are opt-in. The wasm32 / browser entry point is the separate unpublished [`oxiui-web`](../oxiui-web) copy-template, not a facade feature.
 
 The facade is the only crate most applications depend on. It owns the application life-cycle: window configuration ([`AppConfig`]), the event loop ([`App::run`]), headless rendering for CI ([`App::run_headless_once`], [`App::screenshot`]), and cross-cutting features — plugins ([`Plugin`]), global hotkeys ([`HotkeyRegistry`]), a fuzzy-searchable command palette ([`CommandPalette`]), and a toast [`NotificationQueue`]. GPU drivers (Vulkan/Metal/DX12/WebGPU) are OS-provided at runtime and do not appear in `cargo tree --edges normal`, keeping the build Pure Rust.
 
@@ -14,16 +14,16 @@ The facade is the only crate most applications depend on. It owns the applicatio
 ```toml
 [dependencies]
 # Default: egui + wgpu native app
-oxiui = "0.1.1"
+oxiui = "0.1.2"
 
 # Headless / ffi-audit: CPU softbuffer framebuffer, no GPU stack at build time
-oxiui = { version = "0.1.1", default-features = false, features = ["software"] }
+oxiui = { version = "0.1.2", default-features = false, features = ["software"] }
 
 # iced retained-mode backend
-oxiui = { version = "0.1.1", features = ["iced"] }
+oxiui = { version = "0.1.2", features = ["iced"] }
 
-# Everything: tables, accessibility, web, plus the iced backend
-oxiui = { version = "0.1.1", features = ["iced", "table", "a11y", "web"] }
+# Everything: tables, accessibility, plus the iced backend
+oxiui = { version = "0.1.2", features = ["iced", "table", "a11y"] }
 ```
 
 ## Quick Start
@@ -82,7 +82,7 @@ The active backend is chosen with [`App::backend`] and the [`Backend`] enum. The
 | `Slint` | `slint` | Slint toolkit (Pure-Rust CPU renderer) | M5: headless collection mode. Native window (`run_event_loop`) deferred to M6. **GPL-3.0 OR royalty-free OR commercial** — see `oxiui-slint`. |
 | `Dioxus` | `dioxus` | Dioxus reactive framework (`minimal` Pure-Rust feature set) | M5: headless collection mode. Native rendering via `dioxus-native` deferred to M6. |
 
-The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError::Unsupported` on wasm32); instead use [`oxiui::web::mount`](#web-wasm32-entry-point) from a browser binary.
+The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError::Unsupported` on wasm32); instead use [`oxiui_web::mount`](#web-wasm32-entry-point) from the unpublished `oxiui-web` copy-template in a browser binary.
 
 ## API Overview
 
@@ -162,7 +162,6 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | `oxiui::table` | `table` | Glob re-export of `oxiui-table`. |
 | `oxiui::accessibility` | `a11y` | `A11yTree`, `A11yNode`, `WidgetRole`. |
 | `oxiui::recording` | `a11y` | `RecordingUiCtx`, `RecordingEntry`. |
-| `oxiui::web` | `web` | `mount` (browser canvas entry point). |
 
 ### Crate-root re-exports
 
@@ -170,7 +169,7 @@ From `oxiui-core` at the crate root: `ButtonResponse`, `Color`, `FontSpec`, `Pal
 
 ### Web (wasm32) entry point
 
-With `--features web`, `oxiui::web::mount(canvas_id)` boots an OxiUI app on a `<canvas>` (wasm32 only; returns `Err` on native). See [`oxiui-web`](../oxiui-web) for the full browser API.
+The facade itself does **not** mount a browser canvas. On wasm32, `App::run` returns `Err(UiError::Unsupported)` directing you to `oxiui_web::mount(canvas_id)`. That entry point lives in the unpublished [`oxiui-web`](../oxiui-web) crate (`publish = false`), which is provided as a **copy-template** for your own wasm app rather than a crates.io dependency. See its README for the browser API and build steps.
 
 ## Feature Flags
 
@@ -198,8 +197,9 @@ Features fall into two groups: **render backends** (how pixels reach the screen)
 |---------|----------|-------------|
 | `table` | `oxiui-table` | Table widget; enables `oxiui::table::*` and `App::table`. |
 | `a11y` | `oxiui-accessibility`, `accesskit` | Accessibility tree builder; enables `oxiui::accessibility`, `oxiui::recording`, and `App::build_a11y_snapshot`. |
-| `web` | `oxiui-web` | wasm32 browser canvas mount; enables `oxiui::web::mount`. |
 | `default` | `gpu` + `egui` | Boots an egui app rendered via wgpu. |
+
+> **Note:** there is no `web` feature. The wasm32 browser entry point lives in the unpublished [`oxiui-web`](../oxiui-web) crate (`publish = false`), used as a copy-template — see [Web (wasm32) entry point](#web-wasm32-entry-point) above.
 
 ## Errors
 
@@ -246,7 +246,7 @@ cargo run --example hello_dioxus --features dioxus     # Dioxus adapter
 | [`oxiui-iced`](../oxiui-iced) | iced retained-mode backend (`iced` feature). |
 | [`oxiui-slint`](../oxiui-slint) | Slint adapter (`slint` feature). |
 | [`oxiui-dioxus`](../oxiui-dioxus) | Dioxus adapter (`dioxus` feature). |
-| [`oxiui-web`](../oxiui-web) | wasm32 browser entry point (`web` feature). |
+| [`oxiui-web`](../oxiui-web) | wasm32 browser entry point — unpublished (`publish = false`) copy-template, not a facade feature/dependency. |
 
 [`App`]: https://docs.rs/oxiui/latest/oxiui/struct.App.html
 [`AppConfig`]: https://docs.rs/oxiui/latest/oxiui/struct.AppConfig.html
