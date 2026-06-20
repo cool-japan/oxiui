@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.89"
 authors = ["COOLJAPAN OU (Team Kitasan)"]
@@ -28,19 +28,19 @@ description = "OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no
 
 [workspace.dependencies]
 # Internal path deps
-oxiui-core            = { path = "crates/oxiui-core",            version = "0.1.3" }
-oxiui-text            = { path = "crates/oxiui-text",            version = "0.1.3" }
-oxiui-theme           = { path = "crates/oxiui-theme",           version = "0.1.3" }
-oxiui-render-wgpu     = { path = "crates/oxiui-render-wgpu",     version = "0.1.3" }
-oxiui-render-soft     = { path = "crates/oxiui-render-soft",     version = "0.1.3" }
-oxiui-compute-wgpu    = { path = "crates/oxiui-compute-wgpu",    version = "0.1.3" }
-oxiui-egui            = { path = "crates/oxiui-egui",            version = "0.1.3" }
-oxiui-iced            = { path = "crates/oxiui-iced",            version = "0.1.3" }
-oxiui-table           = { path = "crates/oxiui-table",           version = "0.1.3" }
-oxiui-accessibility   = { path = "crates/oxiui-accessibility",   version = "0.1.3" }
-oxiui-web             = { path = "crates/oxiui-web",             version = "0.1.3" }
-oxiui-slint           = { path = "crates/oxiui-slint",           version = "0.1.3" }
-oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.1.3" }
+oxiui-core            = { path = "crates/oxiui-core",            version = "0.1.4" }
+oxiui-text            = { path = "crates/oxiui-text",            version = "0.1.4" }
+oxiui-theme           = { path = "crates/oxiui-theme",           version = "0.1.4" }
+oxiui-render-wgpu     = { path = "crates/oxiui-render-wgpu",     version = "0.1.4" }
+oxiui-render-soft     = { path = "crates/oxiui-render-soft",     version = "0.1.4" }
+oxiui-compute-wgpu    = { path = "crates/oxiui-compute-wgpu",    version = "0.1.4" }
+oxiui-egui            = { path = "crates/oxiui-egui",            version = "0.1.4" }
+oxiui-iced            = { path = "crates/oxiui-iced",            version = "0.1.4" }
+oxiui-table           = { path = "crates/oxiui-table",           version = "0.1.4" }
+oxiui-accessibility   = { path = "crates/oxiui-accessibility",   version = "0.1.4" }
+oxiui-web             = { path = "crates/oxiui-web",             version = "0.1.4" }
+oxiui-slint           = { path = "crates/oxiui-slint",           version = "0.1.4" }
+oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.1.4" }
 
 # External — pinned to latest stable
 egui        = { version = "0.34.3", default-features = false }

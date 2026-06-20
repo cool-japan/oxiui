@@ -1,6 +1,6 @@
 # OxiUI TODO
 
-**v0.1.3 released 2026-06-20** | **v0.1.2 released 2026-06-10** — workspace version bump; M0–M6 complete, 14 crates, 1 958 tests, Pure Rust.
+**v0.1.4 - Unreleased** | **v0.1.3 released 2026-06-20** | **v0.1.2 released 2026-06-10** — workspace version bump; M0–M6 complete, 14 crates, 1 958 tests, Pure Rust.
 
 Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
 
