@@ -69,11 +69,9 @@ impl SoftBackend {
     /// rather than panicking.
     #[cfg(feature = "text")]
     fn init_text_pipeline() -> Option<oxiui_text::TextPipeline> {
-        // Embedded test font — shared with the oxitext test suite.
-        // Path is relative to this source file (src/backend.rs):
-        //   src/ → oxiui-render-soft/ → crates/ → oxiui/ → noffi/ → oxitext/…
-        const FONT_BYTES: &[u8] =
-            include_bytes!("../../../../oxitext/tests/fixtures/test-font.ttf");
+        // Fallback font bundled with this crate (assets/fallback-font.ttf).
+        // Kept inside the crate directory so `cargo publish` packaging works.
+        const FONT_BYTES: &[u8] = include_bytes!("../assets/fallback-font.ttf");
         oxiui_text::TextPipeline::from_bytes(FONT_BYTES).ok()
     }
 

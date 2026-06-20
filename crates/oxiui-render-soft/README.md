@@ -11,14 +11,14 @@ The crate is built around a clip-correct [`Canvas`] that replays draw commands t
 
 ```toml
 [dependencies]
-oxiui-render-soft = "0.1.2"
+oxiui-render-soft = "0.1.3"
 ```
 
 To build the GPU-free audit configuration explicitly, disable default features:
 
 ```toml
 [dependencies]
-oxiui-render-soft = { version = "0.1.2", default-features = false }
+oxiui-render-soft = { version = "0.1.3", default-features = false }
 ```
 
 ## Quick Start

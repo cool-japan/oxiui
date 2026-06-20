@@ -14,10 +14,10 @@ Dioxus is dual-licensed **MIT OR Apache-2.0**, so this adapter carries no copyle
 ```toml
 [dependencies]
 # Collection mode only — no Dioxus dependency
-oxiui-dioxus = "0.1.2"
+oxiui-dioxus = "0.1.3"
 
 # Enable Dioxus rendering (minimal Pure-Rust feature set; no wry/tao/WebKit)
-oxiui-dioxus = { version = "0.1.2", features = ["dioxus"] }
+oxiui-dioxus = { version = "0.1.3", features = ["dioxus"] }
 ```
 
 ## Quick Start

@@ -14,16 +14,16 @@ The facade is the only crate most applications depend on. It owns the applicatio
 ```toml
 [dependencies]
 # Default: egui + wgpu native app
-oxiui = "0.1.2"
+oxiui = "0.1.3"
 
 # Headless / ffi-audit: CPU softbuffer framebuffer, no GPU stack at build time
-oxiui = { version = "0.1.2", default-features = false, features = ["software"] }
+oxiui = { version = "0.1.3", default-features = false, features = ["software"] }
 
 # iced retained-mode backend
-oxiui = { version = "0.1.2", features = ["iced"] }
+oxiui = { version = "0.1.3", features = ["iced"] }
 
 # Everything: tables, accessibility, plus the iced backend
-oxiui = { version = "0.1.2", features = ["iced", "table", "a11y"] }
+oxiui = { version = "0.1.3", features = ["iced", "table", "a11y"] }
 ```
 
 ## Quick Start

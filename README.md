@@ -1,6 +1,6 @@
 # OxiUI
 
-**v0.1.2 released 2026-06-10** | v0.1.1 released 2026-06-04
+**v0.1.3 released 2026-06-20** | v0.1.2 released 2026-06-10
 
 OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no
 SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings. It is a
@@ -11,7 +11,7 @@ windowed through **winit**, with all text shaped through **OxiText** +
 build with a single `cargo build` in a fresh `rust:slim` container, with no
 `libgtk-dev`, `libqt-dev`, or `libsdl2-dev` choreography.
 
-## Status: v0.1.2 released 2026-06-10 — Milestones M0–M6 complete
+## Status: v0.1.3 released 2026-06-20 — Milestones M0–M6 complete
 
 All planned milestones through M6 are done:
 
@@ -30,13 +30,13 @@ All planned milestones through M6 are done:
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.1.2"
+oxiui = "0.1.3"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.1.2", default-features = false, features = ["software"] }
+oxiui = { version = "0.1.3", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.1.2", features = ["iced"] }
+oxiui = { version = "0.1.3", features = ["iced"] }
 ```
 
 ```rust
@@ -73,9 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tests
 
-1 767 unit tests across 14 crates under default features — all pass
-(`cargo nextest run --no-default-features`). With all features enabled
-the count is higher (egui/iced/slint adapters add additional tests).
+1 958 tests across 14 crates with all features enabled — all pass
+(`cargo nextest run --all-features`). 5 tests skipped (GPU/display-required).
 
 ## Replaces (FFI being eliminated)
 

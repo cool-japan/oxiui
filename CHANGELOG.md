@@ -7,6 +7,18 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.3] - 2026-06-20
+
+### Changed
+
+- **Workspace version bump** — all 13 sub-crates (`oxiui-core`, `oxiui-text`, `oxiui-theme`,
+  `oxiui-render-wgpu`, `oxiui-render-soft`, `oxiui-compute-wgpu`, `oxiui-egui`, `oxiui-iced`,
+  `oxiui-table`, `oxiui-accessibility`, `oxiui-web`, `oxiui-slint`, `oxiui-dioxus`) advanced
+  to 0.1.3 in `[workspace.dependencies]` to keep the workspace version uniform after the 0.1.2
+  publish.  No source-code or public-API changes relative to 0.1.2.
+
+---
+
 ## [0.1.2] - 2026-06-10
 
 ### Added
@@ -265,5 +277,6 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - License: Apache-2.0.
 - No `unwrap()` in production code.
 
+[0.1.3]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.1

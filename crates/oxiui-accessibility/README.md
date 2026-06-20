@@ -11,7 +11,7 @@ The crate is intentionally **headless**: no windowing toolkit or platform adapte
 
 ```toml
 [dependencies]
-oxiui-accessibility = "0.1.2"
+oxiui-accessibility = "0.1.3"
 ```
 
 ## Quick Start
