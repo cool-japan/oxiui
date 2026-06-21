@@ -1,45 +1,33 @@
-//! System tray support for OxiUI desktop apps.
+//! `oxiui-tray` — system-tray adapter for OxiUI desktop apps (§5 quarantine crate).
 //!
-//! Provides [`TrayConfig`] and the `App::with_tray` builder method.
-//! The integration is gated behind the `tray` Cargo feature and uses the
-//! [`tray-icon`](https://crates.io/crates/tray-icon) crate which is
-//! Pure-Rust and uses OS-provided system-tray APIs at runtime.
+//! This is a standalone COOLJAPAN Pure Rust Policy §5 **quarantine crate**, not a
+//! module of `oxiui`. Enabling the `tray` feature pulls
+//! [`tray-icon`](https://crates.io/crates/tray-icon), which on Linux drags in the
+//! GTK/GLib C stack; therefore the `oxiui` facade does NOT depend on it and apps
+//! that need a system tray depend on this crate directly.
+//!
+//! [`TrayHandle::mount`] is the entry point. Full event-loop integration (tray
+//! click / menu selection callbacks firing during the host event loop) is planned
+//! for a future release.
 //!
 //! # Feature gate
 //!
 //! ```toml
 //! [dependencies]
-//! oxiui = { version = "*", features = ["tray"] }
+//! oxiui-tray = { version = "*", features = ["tray"] }
 //! ```
 //!
 //! # Basic usage
 //!
 //! ```rust,no_run
-//! use oxiui::{App, AppConfig};
-//! use oxiui::tray::{TrayConfig, TrayMenuItem};
-//!
-//! App::new(AppConfig::new().title("demo"))
-//!     .with_tray(
-//!         TrayConfig::new()
-//!             .tooltip("My OxiUI App")
-//!             .menu_item(TrayMenuItem::action("Show", || {}))
-//!             .menu_item(TrayMenuItem::action("Quit", || std::process::exit(0))),
-//!     )
-//!     .content(|ui| {
-//!         ui.label("Hello from the tray app!");
-//!     });
+//! use oxiui_tray::{TrayConfig, TrayMenuItem, TrayHandle};
+//! let _handle = TrayHandle::mount(
+//!     TrayConfig::new()
+//!         .tooltip("My OxiUI App")
+//!         .menu_item(TrayMenuItem::action("Show", || {}))
+//!         .menu_item(TrayMenuItem::action("Quit", || std::process::exit(0))),
+//! ).expect("tray init failed");
 //! ```
-//!
-//! # Implementation note (basic)
-//!
-//! This is a basic implementation of system tray support.  The [`TrayHandle`]
-//! returned by `App::with_tray` owns the underlying `tray-icon` icon/menu
-//! objects and keeps them alive for the duration of the app.  Full event
-//! loop integration (tray click, menu selection callbacks firing during the
-//! eframe event loop) requires wiring `tray-icon`'s `TrayIconEvent` receiver
-//! into the eframe `update()` callback, which is planned for a future release.
-//!
-//! `App::with_tray`: crate::App::with_tray
 
 // ── TrayMenuItem ─────────────────────────────────────────────────────────────
 
@@ -112,7 +100,7 @@ impl TrayMenuItem {
 /// # Examples
 ///
 /// ```rust
-/// use oxiui::tray::{TrayConfig, TrayMenuItem};
+/// use oxiui_tray::{TrayConfig, TrayMenuItem};
 ///
 /// let config = TrayConfig::new()
 ///     .tooltip("My App")
@@ -191,7 +179,7 @@ impl TrayConfig {
 
 /// A live handle to a mounted system tray icon.
 ///
-/// Returned by `App::with_tray` in the future or by [`TrayHandle::mount`].
+/// Returned by [`TrayHandle::mount`].
 /// Dropping this handle removes the tray icon from the system tray.
 ///
 /// # Current status

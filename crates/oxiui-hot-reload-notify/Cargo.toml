@@ -1,0 +1,32 @@
+# ── COOLJAPAN Pure-Rust Policy §5 QUARANTINE CRATE ──────────────────────────────
+#
+# This crate intentionally sits OUTSIDE the Pure-Rust L1 pure-set.
+#
+# It wraps the third-party `notify` file-watcher, which is NOT Pure Rust:
+#   * on Linux   `notify` unconditionally pulls `inotify` → `inotify-sys`  (C FFI)
+#   * on macOS   `notify` pulls `fsevent-sys`                              (C FFI)
+#   * on *BSD    `notify` pulls `kqueue-sys`                               (C FFI)
+# `notify` offers no build configuration that drops these OS file-watching FFI
+# backends (`default-features = false` does NOT remove the Linux inotify backend),
+# so per policy §5 the impurity is QUARANTINED here rather than allowed to leak
+# into `oxiui-compute-wgpu`.
+#
+# Apps that want live WGSL shader hot-reload depend on THIS crate directly and
+# construct `ShaderWatcher::new()` themselves; `oxiui-compute-wgpu` stays pure.
+# ────────────────────────────────────────────────────────────────────────────────
+
+[package]
+name = "oxiui-hot-reload-notify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OxiUI WGSL hot-reload file watcher (quarantine crate — pulls inotify-sys/fsevent-sys via notify; NOT in the Pure-Rust L1 set)"
+keywords = ["wgsl", "hot-reload", "notify", "cooljapan", "oxiui"]
+categories = ["filesystem", "rendering"]
+publish = true
+
+[dependencies]
+notify = { version = "8.2.0" }

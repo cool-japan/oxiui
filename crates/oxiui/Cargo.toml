@@ -17,12 +17,9 @@ egui     = ["dep:oxiui-egui", "dep:oxiui-render-wgpu", "dep:egui", "dep:eframe",
 iced     = ["dep:oxiui-iced", "dep:iced"]
 table    = ["dep:oxiui-table"]
 a11y     = ["dep:oxiui-accessibility", "dep:accesskit"]
-slint    = ["dep:oxiui-slint", "oxiui-slint/slint"]
 dioxus   = ["dep:oxiui-dioxus", "oxiui-dioxus/dioxus"]
 tracing  = ["dep:tracing", "dep:tracing-subscriber"]
 persist  = ["dep:oxicode"]
-## System tray integration via tray-icon (desktop-only; desktop platforms only).
-tray     = ["dep:tray-icon"]
 ## Native OS file / message dialogs via rfd (Rusty File Dialog).
 dialogs  = ["dep:rfd"]
 default  = ["gpu", "egui"]
@@ -71,10 +68,6 @@ optional = true
 workspace = true
 optional = true
 
-[dependencies.oxiui-slint]
-workspace = true
-optional = true
-
 [dependencies.oxiui-dioxus]
 workspace = true
 optional = true
@@ -92,10 +85,6 @@ workspace = true
 optional = true
 
 [dependencies.tracing-subscriber]
-workspace = true
-optional = true
-
-[dependencies.tray-icon]
 workspace = true
 optional = true
 
@@ -117,10 +106,6 @@ required-features = ["iced"]
 [[example]]
 name = "hello_table"
 required-features = ["table"]
-
-[[example]]
-name = "hello_slint"
-required-features = ["slint"]
 
 [[example]]
 name = "hello_dioxus"

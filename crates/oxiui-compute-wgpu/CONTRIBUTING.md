@@ -50,7 +50,7 @@ simply skipped gracefully.
 | Feature | Purpose |
 |---------|---------|
 | `tracing` | Adds `#[tracing::instrument]` spans to `ComputeContext::new`, `read_back`, and `compute_pipeline` for span-based profiling. |
-| `hot-reload` | Adds `hot_reload::ShaderWatcher` for live WGSL file watching via `notify`. |
+| _(moved)_ | WGSL hot-reload moved to the `oxiui-hot-reload-notify` quarantine crate. |
 
 ## Running benchmarks
 
