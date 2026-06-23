@@ -1,49 +1,49 @@
-//! WGSL shader hot-reload via `notify` file-watching.
+//! # `oxiui-hot-reload-notify`
 //!
-//! # Feature gate
+//! WGSL shader hot-reload file watcher for the COOLJAPAN OxiUI ecosystem.
 //!
-//! This module is compiled only when the `hot-reload` Cargo feature is enabled.
-//! Add `oxiui-compute-wgpu = { version = "…", features = ["hot-reload"] }` to
-//! your `Cargo.toml`.
+//! ## Pure-Rust Policy note (§5 quarantine)
 //!
-//! # Overview
+//! This is a **quarantine crate**: it wraps the third-party [`notify`] file
+//! watcher, which pulls `inotify-sys` on Linux and `fsevent-sys` on macOS —
+//! non-pure OS file-watching FFI with no build flag to disable it.  It is
+//! therefore intentionally **excluded from the Pure-Rust L1 pure-set**.  Apps
+//! that want live WGSL shader hot-reload depend on this crate directly; the
+//! `oxiui-compute-wgpu` core stays Pure Rust.
 //!
-//! `ShaderWatcher` wraps a `notify::RecommendedWatcher` and maintains a
-//! set of WGSL source paths to monitor.  Whenever a watched file is modified on
-//! disk, its canonical path is pushed into an `mpsc` channel.
+//! ## Overview
+//!
+//! [`ShaderWatcher`] wraps a `notify::RecommendedWatcher` and maintains a set
+//! of WGSL source paths to monitor.  Whenever a watched file is modified on
+//! disk, its path is pushed into a shared set.
 //!
 //! The caller drives recompilation by:
 //!
-//! 1. Creating a `ShaderWatcher` (or obtaining one via
-//!    [`ComputeContext::watcher()`][crate::ComputeContext::watcher]).
-//! 2. Registering paths with `ShaderWatcher::watch`.
-//! 3. Each frame, calling `ShaderWatcher::drain_changed` to collect the
-//!    set of paths that have been modified since the last call.
-//! 4. For each returned path, re-reading the source and calling
-//!    [`crate::pipeline::PipelineCache::get_or_compile`] (or invalidating
-//!    the pipeline manually) to trigger recompilation.
+//! 1. Creating a [`ShaderWatcher`] with [`ShaderWatcher::new`] (or the
+//!    non-panicking [`ShaderWatcher::try_new`]).
+//! 2. Registering paths with [`ShaderWatcher::watch`].
+//! 3. Each frame, calling [`ShaderWatcher::drain_changed`] to collect the set
+//!    of paths that have been modified since the last call.
+//! 4. For each returned path, re-reading the source and recompiling the
+//!    affected pipeline (e.g. via `oxiui_compute_wgpu::compute_pipeline` or
+//!    `PipelineCache::get_or_compile`).
 //!
-//! # Example
+//! ## Example
 //!
 //! ```rust,no_run
-//! # #[cfg(feature = "hot-reload")]
-//! # {
 //! use std::path::PathBuf;
-//! use oxiui_compute_wgpu::{ComputeContext, PipelineCache};
+//! use oxiui_hot_reload_notify::ShaderWatcher;
 //!
-//! let ctx = ComputeContext::try_new().expect("GPU required for this example");
-//! let mut watcher = ctx.watcher();
+//! let mut watcher = ShaderWatcher::new();
 //! let shader_path = PathBuf::from("shaders/my_kernel.wgsl");
 //! watcher.watch(&shader_path).expect("path must exist");
 //!
 //! // In the render loop:
 //! let changed: Vec<PathBuf> = watcher.drain_changed();
 //! for path in changed {
-//!     let src = std::fs::read_to_string(&path).unwrap();
-//!     // Recompile — call `compute_pipeline` or `PipelineCache::get_or_compile`.
-//!     let _pipeline = oxiui_compute_wgpu::compute_pipeline(&ctx.device, &src, "main");
+//!     // Re-read the source and recompile the affected pipeline.
+//!     let _src = std::fs::read_to_string(&path);
 //! }
-//! # }
 //! ```
 
 use std::collections::HashSet;
@@ -56,8 +56,8 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// A file-system watcher for WGSL source files that signals recompilation needs.
 ///
-/// Obtain a `ShaderWatcher` via [`ComputeContext::watcher()`][crate::ComputeContext::watcher]
-/// or by constructing one directly with [`ShaderWatcher::new()`].
+/// Construct one with [`ShaderWatcher::new()`] (or the non-panicking
+/// [`ShaderWatcher::try_new()`]).
 ///
 /// Call [`drain_changed`][ShaderWatcher::drain_changed] each frame to retrieve
 /// the set of paths that have been modified since the last call.

@@ -1,6 +1,6 @@
 # OxiUI
 
-**v0.1.3 released 2026-06-20** | v0.1.2 released 2026-06-10
+**v0.2.0 released 2026-06-23** | v0.1.3 released 2026-06-20
 
 OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no
 SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings. It is a
@@ -11,7 +11,7 @@ windowed through **winit**, with all text shaped through **OxiText** +
 build with a single `cargo build` in a fresh `rust:slim` container, with no
 `libgtk-dev`, `libqt-dev`, or `libsdl2-dev` choreography.
 
-## Status: v0.1.3 released 2026-06-20 — Milestones M0–M6 complete
+## Status: v0.2.0 released 2026-06-23 — Pure Rust Policy v2
 
 All planned milestones through M6 are done:
 
@@ -25,18 +25,28 @@ All planned milestones through M6 are done:
 | M5 | softbuffer headless stable + high-contrast WCAG-AAA + slint/dioxus adapters | ✓ |
 | M6 | `oxiui-compute-wgpu` + `oxiui-render-wgpu` published to crates.io | ✓ |
 
+## Breaking changes in 0.2.0
+
+- **`tray` feature removed from `oxiui` facade** — system-tray support is now in the
+  `oxiui-tray` quarantine crate (pulls GTK on Linux). Depend on `oxiui-tray` directly
+  with the `tray` feature if you need a system tray.
+- **`slint` feature removed from `oxiui` facade** — `oxiui-slint` is a known-non-pure
+  adapter; use it directly instead.
+- **`hot-reload` feature removed from `oxiui-compute-wgpu`** — WGSL hot-reload is now
+  in the `oxiui-hot-reload-notify` quarantine crate (pulls inotify/fsevent-sys).
+
 ## Quick start
 
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.1.3"
+oxiui = "0.2.0"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.1.3", default-features = false, features = ["software"] }
+oxiui = { version = "0.2.0", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.1.3", features = ["iced"] }
+oxiui = { version = "0.2.0", features = ["iced"] }
 ```
 
 ```rust
@@ -69,11 +79,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `oxiui-web` | `web` | wasm32 entry point — `mount()` on `<canvas>`, key mapping, non-wasm stubs |
 | `oxiui-slint` | `slint` | slint 1.16.1 optional adapter — `SlintCtx`, headless collection mode |
 | `oxiui-dioxus` | `dioxus` | dioxus 0.7 optional adapter — `DioxusCtx` reactive bridge |
+| `oxiui-tray` | (quarantine) | §5 system-tray adapter — `tray` feature pulls GTK on Linux; opt-in only |
+| `oxiui-hot-reload-notify` | (quarantine) | §5 WGSL hot-reload via `notify` — pulls inotify/fsevent-sys; opt-in only |
 | `oxiui` | facade | `App` builder, `Backend::{Egui,Iced,Slint,Dioxus}`, reactive re-exports |
 
 ## Tests
 
-1 958 tests across 14 crates with all features enabled — all pass
+1 964 tests across 16 crates — all pass
 (`cargo nextest run --all-features`). 5 tests skipped (GPU/display-required).
 
 ## Replaces (FFI being eliminated)

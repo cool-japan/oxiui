@@ -1,3 +1,26 @@
+# ============================================================================
+# COOLJAPAN Pure Rust Policy v2 — scope model for this deny.toml
+# ----------------------------------------------------------------------------
+# This deny.toml enforces the "never GTK/Qt/SDL/system-font-C/crypto-C" bans
+# across the workspace's DEFAULT-feature closures (see [bans] below).
+#
+# It does NOT set `[graph] all-features = true`. Under Pure Rust Policy v2 the
+# authoritative L1 gate — the `--all-features` no-non-allowlisted-FFI invariant
+# — is verified PER PURE CRATE via:
+#     cargo tree -p <crate> --all-features -e normal,build
+# and NOT via a workspace-wide all-features scan here.
+#
+# `oxiui-tray`, `oxiui-hot-reload-notify`, and `oxiui-slint` are §5 quarantine /
+# known-non-pure crates: they intentionally pull C FFI (tray-icon -> GTK;
+# notify -> inotify-sys/fsevent-sys; slint -> yeslogic-fontconfig-sys) and are
+# EXCLUDED from the L1 pure-set. `cargo deny check bans` is meant to run over the
+# pure-set only; running it against these crates' own graphs is EXPECTED to
+# surface their quarantined FFI and is NOT a violation.
+#
+# The pure facade `oxiui` and `oxiui-compute-wgpu` are verified FFI-free
+# (host + linux target) as of 0.2.0.
+# ============================================================================
+
 [advisories]
 ignore = []
 

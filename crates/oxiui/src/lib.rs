@@ -16,13 +16,6 @@
 //! reflected as `ButtonResponse::clicked = true` in the next frame's view call
 //! (one-frame latency, inherent to the retained-mode / immediate-mode bridge).
 //!
-//! **slint backend:** Enable with `--features slint`. The slint backend wires
-//! the `content` closure through `oxiui_slint::SlintCtx`. In M5, this operates
-//! in headless collection mode (no display required). Native window rendering
-//! via `slint::run_event_loop()` is deferred to M6. Note: slint 1.16.1 is
-//! GPL-3.0 OR royalty-free OR commercial licensed; only pulled in under this
-//! explicit feature gate.
-//!
 //! **dioxus backend:** Enable with `--features dioxus`. The dioxus backend wires
 //! the `content` closure through `oxiui_dioxus::DioxusCtx`. In M5, this operates
 //! in headless collection mode. The `minimal` dioxus feature set is used (Pure
@@ -206,20 +199,6 @@ pub mod solver {
     };
 }
 
-/// System tray integration (requires `tray` feature).
-///
-/// Provides [`tray::TrayConfig`], [`tray::TrayMenuItem`], and [`tray::TrayHandle`]
-/// for registering a system tray icon with a context menu.  The icon is backed by
-/// the [`tray-icon`](https://crates.io/crates/tray-icon) crate at runtime.
-///
-/// # Note (basic implementation)
-///
-/// This is a basic implementation.  Full event-loop integration (receiving menu-click
-/// callbacks inside the eframe/iced event loop) is planned for a future release.
-pub mod tray;
-
-pub use tray::{TrayConfig, TrayHandle, TrayMenuItem};
-
 /// Native OS file / message dialogs (requires `dialogs` feature).
 ///
 /// Provides [`native_dialog::open_file_dialog`], [`native_dialog::save_file_dialog`],
@@ -274,7 +253,8 @@ pub use command::{Command, CommandPalette};
 ///
 /// The default backend is [`Backend::Egui`]. Select `Backend::Iced` (requires
 /// the `iced` feature) to use the iced retained-mode framework.
-/// `Backend::Slint` and `Backend::Dioxus` are experimental adapters added in M5.
+/// `Backend::Dioxus` is an experimental adapter added in M5. (A slint adapter is
+/// available via the separate `oxiui-slint` crate.)
 #[derive(Clone, Debug, Default)]
 pub enum Backend {
     /// egui + eframe (immediate-mode, default).
@@ -286,15 +266,6 @@ pub enum Backend {
     /// clicks carry a one-frame latency (inherent to retained-mode bridging).
     #[cfg(feature = "iced")]
     Iced,
-    /// slint GUI toolkit adapter. Requires `--features slint`.
-    ///
-    /// In M5, operates in headless collection mode. Native window rendering
-    /// via `slint::run_event_loop()` is planned for M6.
-    ///
-    /// **License:** slint is GPL-3.0 OR royalty-free OR commercial. Enable
-    /// only in projects that are compatible with one of those license options.
-    #[cfg(feature = "slint")]
-    Slint,
     /// Dioxus reactive UI adapter. Requires `--features dioxus`.
     ///
     /// In M5, operates in headless collection mode. Full Dioxus native rendering
@@ -1047,55 +1018,6 @@ impl App {
         })
     }
 
-    // ─── System tray ─────────────────────────────────────────────────────────────
-
-    /// Attach a system tray icon to the application.
-    ///
-    /// The tray icon is created with the given [`TrayConfig`] and lives for the
-    /// duration of the application.  Backend dispatch:
-    ///
-    /// - **egui** (`Backend::Egui`): tray icon is mounted before the eframe event
-    ///   loop starts; the handle is kept alive inside the closure.
-    /// - **iced** (`Backend::Iced`): same approach — tray is mounted before the
-    ///   iced event loop starts.
-    ///
-    /// Returns `Err(String)` if the tray icon could not be created (e.g. no system
-    /// tray service is running on the desktop).
-    ///
-    /// **Requires the `tray` Cargo feature.**
-    ///
-    /// # Basic implementation note
-    ///
-    /// This is a basic implementation: the tray icon appears in the system tray
-    /// but menu-click callbacks are not yet wired into the eframe/iced event loop
-    /// (planned for a future release).
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use oxiui::{App, AppConfig};
-    /// use oxiui::tray::{TrayConfig, TrayMenuItem};
-    ///
-    /// App::new(AppConfig::new().title("demo"))
-    ///     .with_tray(
-    ///         TrayConfig::new()
-    ///             .tooltip("My OxiUI App")
-    ///             .menu_item(TrayMenuItem::action("Quit", || std::process::exit(0))),
-    ///     )
-    ///     .expect("tray init failed")
-    ///     .content(|ui| {
-    ///         ui.heading("Hello");
-    ///     });
-    /// ```
-    pub fn with_tray(self, config: tray::TrayConfig) -> Result<Self, String> {
-        // Mount the tray icon (or a no-op handle without the `tray` feature).
-        // The handle is intentionally dropped here: on desktop the OS tray is
-        // managed globally; a future slice will store it in `App` for runtime
-        // update support.
-        let _ = tray::TrayHandle::mount(config)?;
-        Ok(self)
-    }
-
     // ─── Multi-window support ─────────────────────────────────────────────────
 
     /// Register a secondary window with the given configuration.
@@ -1378,30 +1300,12 @@ impl App {
             return self.run_iced();
         }
 
-        #[cfg(feature = "slint")]
-        if let Backend::Slint = &self.backend {
-            return self.run_slint_backend();
-        }
-
         #[cfg(feature = "dioxus")]
         if let Backend::Dioxus = &self.backend {
             return self.run_dioxus_backend();
         }
 
         self.run_egui_or_fallback()
-    }
-
-    #[cfg(feature = "slint")]
-    fn run_slint_backend(mut self) -> Result<AppExit, UiError> {
-        use oxiui_slint::run_slint;
-
-        let theme_ref = self.theme.as_ref();
-        if let Some(content) = self.content.take() {
-            let mut content_fn = content;
-            run_slint(theme_ref, move |ui| content_fn(ui)).map(|()| AppExit::Ok)
-        } else {
-            run_slint(theme_ref, |_ui| {}).map(|()| AppExit::Ok)
-        }
     }
 
     #[cfg(feature = "dioxus")]

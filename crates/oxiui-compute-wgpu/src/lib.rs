@@ -66,7 +66,7 @@
 //! | [`wgsl`]    | WGSL preprocessor, validation, and built-in compute kernels |
 //! | [`dispatch`] | [`Dispatcher`] — high-level GPU compute helpers |
 //! | [`integration`] | Bridges to `oxiui-render-soft`, `oxiui-render-wgpu`, `oxiui-text` |
-//! | `hot_reload` | WGSL hot-reload via `notify` (behind the `hot-reload` feature) |
+//! | _hot-reload_ | Moved to the separate [`oxiui-hot-reload-notify`] quarantine crate (kept out of the Pure-Rust pure-set) |
 //!
 //! ## Dependency re-exports
 //!
@@ -79,7 +79,11 @@
 //! | Feature | Description |
 //! |---------|-------------|
 //! | `tracing` | Adds `#[tracing::instrument]` spans to key functions for span-based profiling. |
-//! | `hot-reload` | Adds `hot_reload::ShaderWatcher` for live WGSL file watching via `notify`. |
+//! WGSL hot-reload no longer lives here: the `notify`-backed `ShaderWatcher`
+//! was moved into the dedicated `oxiui-hot-reload-notify` crate so that this
+//! crate stays Pure Rust (`notify` pulls `inotify-sys` / `fsevent-sys`).  Apps
+//! that want shader hot-reload should depend on `oxiui-hot-reload-notify`
+//! directly.
 
 pub mod buffer;
 pub mod context;
@@ -88,12 +92,6 @@ pub mod error;
 pub mod integration;
 pub mod pipeline;
 pub mod wgsl;
-
-/// Live WGSL hot-reload via the `notify` file watcher.
-///
-/// Enable with `features = ["hot-reload"]` in `Cargo.toml`.
-#[cfg(feature = "hot-reload")]
-pub mod hot_reload;
 
 // ── Flat re-exports ────────────────────────────────────────────────────────────
 

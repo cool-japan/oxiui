@@ -19,6 +19,14 @@
 //! brings in that dependency. Downstream consumers must ensure their project's
 //! license is compatible with one of slint's license options.
 //!
+//! # Purity note (COOLJAPAN Pure Rust Policy v2)
+//!
+//! **NON-PURE adapter.** Enabling the `slint` feature pulls
+//! `slint` -> parley/fontique -> `yeslogic-fontconfig-sys` (a C fontconfig
+//! binding) on Linux. This is slint-upstream font discovery with no pure
+//! opt-out today, so `oxiui-slint` is **NOT** part of the OxiUI Pure-Rust L1
+//! set. Depend on it directly only if you accept that boundary.
+//!
 //! # Palette mapping note (M5)
 //!
 //! slint 1.16.1 exposes a `Color::from_argb_u8(a, r, g, b)` constructor and

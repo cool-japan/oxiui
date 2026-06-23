@@ -7,6 +7,51 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.0] - 2026-06-23
+
+### Removed (BREAKING)
+
+- **`oxiui` facade: `tray` feature removed** — system-tray support moved to the new
+  `oxiui-tray` quarantine crate. Apps that need a system tray now depend on
+  `oxiui-tray` directly and enable its `tray` feature. Rationale: `tray-icon` drags
+  the entire GTK/GLib C stack (gtk-sys, gdk-sys, gio-sys, glib-sys, gobject-sys,
+  atk-sys, cairo-sys-rs, pango-sys, libappindicator-sys) plus dirs-sys on Linux,
+  which must not leak into the facade's closure.
+
+- **`oxiui` facade: `slint` feature removed** — use the `oxiui-slint` adapter crate
+  directly instead. `oxiui-slint` is a KNOWN-NON-PURE adapter: enabling its `slint`
+  feature pulls `slint` -> parley/fontique -> `yeslogic-fontconfig-sys` (a C
+  fontconfig binding) on Linux, which is slint-upstream font discovery with no pure
+  opt-out today. The facade can no longer aggregate it and stay pure.
+
+- **`oxiui-compute-wgpu`: `hot-reload` feature removed** — WGSL shader hot-reload
+  moved to the new `oxiui-hot-reload-notify` quarantine crate. Apps that want live
+  shader reload depend on `oxiui-hot-reload-notify` directly and construct
+  `ShaderWatcher::new()` themselves. Rationale: `notify` unconditionally pulls
+  `inotify-sys` (Linux) / `fsevent-sys` (macOS) / `kqueue-sys` (BSD) C FFI backends
+  with no pure opt-out.
+
+### Added
+
+- **`oxiui-tray` crate** — §5 quarantine crate housing the `tray-icon`-backed system
+  tray adapter (feature `tray`, default off).
+
+- **`oxiui-hot-reload-notify` crate** — §5 quarantine crate housing the `notify`-backed
+  WGSL hot-reload file watcher.
+
+### Changed
+
+- **Workspace version → 0.2.0** — breaking release. Internal `oxiui-*` path-dep ranges
+  in `[workspace.dependencies]` advanced to `"0.2"`.
+
+Motivation: **COOLJAPAN Pure Rust Policy v2 (L1)** — the `oxiui` facade and
+`oxiui-compute-wgpu` `--all-features` closures are now free of non-allowlisted FFI
+(GTK/fontconfig/inotify-sys/fsevent-sys/kqueue-sys). The non-pure adapters
+(`oxiui-tray`, `oxiui-hot-reload-notify`, `oxiui-slint`) are quarantined as
+direct-opt-in crates outside the L1 pure-set.
+
+---
+
 ## [0.1.3] - 2026-06-20
 
 ### Changed
@@ -277,6 +322,7 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - License: Apache-2.0.
 - No `unwrap()` in production code.
 
+[0.2.0]: https://github.com/cool-japan/oxiui/releases/tag/v0.2.0
 [0.1.3]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.1

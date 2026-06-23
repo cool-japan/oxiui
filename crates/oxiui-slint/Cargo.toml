@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "OxiUI adapter for the slint GUI toolkit (optional; GPL-gated)"
+description = "OxiUI slint adapter (NON-PURE: slint pulls yeslogic-fontconfig-sys on Linux; not in the Pure-Rust L1 set; GPL-gated)"
 categories = ["gui", "rendering"]
 keywords = ["gui", "slint", "cooljapan", "pure-rust", "oxiui"]
 
@@ -32,3 +32,7 @@ optional = true
 
 [dev-dependencies]
 oxiui-theme = { path = "../oxiui-theme" }
+
+[[example]]
+name = "hello_slint"
+required-features = ["slint"]

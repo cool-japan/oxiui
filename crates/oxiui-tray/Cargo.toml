@@ -1,0 +1,31 @@
+[package]
+name = "oxiui-tray"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OxiUI system-tray adapter (quarantine crate — pulls GTK on Linux; NOT in the Pure-Rust L1 set)"
+categories = ["gui"]
+keywords = ["gui", "tray", "cooljapan", "oxiui"]
+
+# ─── COOLJAPAN Pure Rust Policy §5 QUARANTINE CRATE ──────────────────────────
+# Enabling the `tray` feature pulls `tray-icon`, which on Linux drags in the
+# entire GTK/GLib C stack (gtk-sys, gdk-sys, gdk-pixbuf-sys, gio-sys, glib-sys,
+# gobject-sys, atk-sys, cairo-sys-rs, pango-sys, libappindicator-sys) plus
+# dirs-sys. System tray has NO pure path on Linux (it requires GTK at the OS
+# layer). Per policy §5 this code is QUARANTINED here and is intentionally
+# EXCLUDED from the Pure-Rust L1 pure-set so the `oxiui` facade closure stays
+# 100% pure. Apps that need a system tray depend on THIS crate directly with the
+# `tray` feature enabled.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[features]
+default = []
+## System tray integration via tray-icon (desktop-only; pulls GTK on Linux).
+tray = ["dep:tray-icon"]
+
+[dependencies.tray-icon]
+workspace = true
+optional = true

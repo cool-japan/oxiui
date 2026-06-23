@@ -250,27 +250,6 @@ impl ComputeContext {
     pub fn with_power_preference(pref: wgpu::PowerPreference) -> ContextBuilder {
         ContextBuilder::default().with_power_preference(pref)
     }
-
-    /// Return a [`crate::hot_reload::ShaderWatcher`] that watches WGSL source
-    /// files on disk and signals when recompilation is needed.
-    ///
-    /// Only available when the `hot-reload` Cargo feature is enabled.
-    ///
-    /// ```rust,no_run
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use oxiui_compute_wgpu::ComputeContext;
-    ///
-    /// if let Some(ctx) = ComputeContext::try_new() {
-    ///     let _watcher = ctx.watcher();
-    ///     // Add paths to watch, then call watcher.drain_changed() each frame.
-    /// }
-    /// # }
-    /// ```
-    #[cfg(feature = "hot-reload")]
-    pub fn watcher(&self) -> crate::hot_reload::ShaderWatcher {
-        crate::hot_reload::ShaderWatcher::new()
-    }
 }
 
 // ── ContextBuilder ─────────────────────────────────────────────────────────────
