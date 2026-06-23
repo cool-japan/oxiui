@@ -7,6 +7,18 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.1] - Unreleased
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
 ## [0.2.0] - 2026-06-23
 
 ### Removed (BREAKING)

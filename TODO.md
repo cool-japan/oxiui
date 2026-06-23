@@ -1,6 +1,6 @@
 # OxiUI TODO
 
-**v0.2.0 released 2026-06-23** | **v0.1.3 released 2026-06-20** | **v0.1.2 released 2026-06-10** — Pure Rust Policy v2: GTK/inotify quarantined, 16 crates, Pure Rust facade.
+**v0.2.1 — Unreleased** | **v0.2.0 released 2026-06-23** | **v0.1.3 released 2026-06-20** — Pure Rust Policy v2: GTK/inotify quarantined, 16 crates, Pure Rust facade.
 
 Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
 
