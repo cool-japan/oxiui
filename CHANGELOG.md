@@ -7,7 +7,7 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.2.0] - 2026-06-21
+## [0.2.0] - 2026-06-23
 
 ### Removed (BREAKING)
 
@@ -322,6 +322,7 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - License: Apache-2.0.
 - No `unwrap()` in production code.
 
+[0.2.0]: https://github.com/cool-japan/oxiui/releases/tag/v0.2.0
 [0.1.3]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.1
