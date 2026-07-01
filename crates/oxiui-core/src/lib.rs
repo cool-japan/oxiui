@@ -414,8 +414,11 @@ pub enum UiEvent {
     /// range `(start, end)` within `text` that should be highlighted as the
     /// cursor/selection; `None` means no explicit cursor hint.
     ///
-    /// Note: on the egui forwarding path the cursor range is not forwarded
-    /// (egui 0.34's `ImeEvent::Preedit` only accepts a `String`).
+    /// Note: on the egui forwarding path the cursor range **is** forwarded as
+    /// of egui 0.35+ — it is converted from this byte-offset range into the
+    /// char-offset `egui::ImeEvent::Preedit::active_range_chars` range (egui
+    /// 0.34 and earlier accepted only a bare `String`, so the cursor hint was
+    /// dropped there).
     ImePreedit {
         /// Composition string being entered.
         text: String,

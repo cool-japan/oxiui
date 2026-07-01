@@ -624,7 +624,10 @@ pub fn tokens_to_egui_style(
 ///
 /// **IME events:**
 /// - [`UiEvent::ImePreedit`] → [`egui::Event::Ime`](`egui::ImeEvent::Preedit`)
-///   (the cursor range is dropped; egui 0.34 does not carry it).
+///   (`cursor`'s byte-offset range is converted to egui 0.35's char-offset
+///   `active_range_chars`, mirroring the conversion `egui-winit` performs for
+///   raw OS IME events; egui 0.34 and earlier accepted only a bare `String`
+///   and any cursor hint was dropped).
 /// - [`UiEvent::ImeCommit`] → [`egui::Event::Ime`](`egui::ImeEvent::Commit`)
 ///
 /// **Keyboard events (extended):**
@@ -655,12 +658,24 @@ pub fn tokens_to_egui_style(
 /// `#[non_exhaustive]`).
 pub fn forward_event_to_egui(ctx: &egui::Context, event: &UiEvent) {
     match event {
-        UiEvent::ImePreedit { text, cursor: _ } => {
-            // cursor is intentionally dropped: egui 0.34 ImeEvent::Preedit(String)
-            // does not carry a cursor position.
+        UiEvent::ImePreedit { text, cursor } => {
+            // `cursor` is a *byte*-offset `(start, end)` range into `text`;
+            // egui 0.35's `ImeEvent::Preedit::active_range_chars` wants a
+            // *char*-offset `Range<usize>`. Convert the same way
+            // `egui-winit::State::on_ime` converts winit's raw byte range,
+            // using `str::get` so a range that lands off a UTF-8 char
+            // boundary (or out of bounds) safely degrades to `None` instead
+            // of panicking on a bad slice index.
+            let active_range_chars = cursor.and_then(|(start, end)| {
+                let start_chars = text.get(..start)?.chars().count();
+                let middle_chars = text.get(start..end)?.chars().count();
+                Some(start_chars..start_chars + middle_chars)
+            });
             ctx.input_mut(|i| {
-                i.events
-                    .push(egui::Event::Ime(egui::ImeEvent::Preedit(text.clone())));
+                i.events.push(egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: text.clone(),
+                    active_range_chars,
+                }));
             });
         }
         UiEvent::ImeCommit(text) => {

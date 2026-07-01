@@ -46,13 +46,13 @@ oxiui-dioxus          = { path = "crates/oxiui-dioxus",          version = "0.2"
 oxiui-tray            = { path = "crates/oxiui-tray",            version = "0.2" }
 
 # External — pinned to latest stable
-egui        = { version = "0.34.3", default-features = false }
+egui        = { version = "0.35.0", default-features = false }
 # The `x11` + `wayland` features are required on Linux: without them winit
 # emits `compile_error!("The platform you're compiling for is not supported")`
 # because eframe pins winit with default-features off.  Both backends load the
 # X11 / Wayland client libraries dynamically at runtime (x11-dl `dlopen`, pure-Rust
 # wayland-client) — nothing C is linked at build time, so this stays Pure Rust.
-eframe      = { version = "0.34.3", default-features = false, features = ["wgpu", "x11", "wayland"] }
+eframe      = { version = "0.35.0", default-features = false, features = ["wgpu", "x11", "wayland"] }
 softbuffer  = { version = "0.4.8" }
 
 # wgpu GPU stack — Pure Rust (Metal/Vulkan/DX12/WebGPU drivers are OS-provided at
@@ -78,11 +78,11 @@ accesskit       = { version = "0.24.1" }
 accesskit_winit = { version = "0.33.1" }
 
 # wasm32 deps (only used inside oxiui-web, always cfg-gated to wasm32)
-wasm-bindgen             = { version = "0.2.125" }
+wasm-bindgen             = { version = "0.2.126" }
 wasm-bindgen-futures     = { version = "0.4" }
 js-sys                   = { version = "0.3" }
 console_error_panic_hook = { version = "0.1" }
-web-sys              = { version = "0.3.102", features = [
+web-sys              = { version = "0.3.103", features = [
   # Core DOM
   "Window", "Document", "HtmlCanvasElement", "HtmlElement", "CssStyleDeclaration",
   "WebGlRenderingContext", "Event", "EventTarget", "Navigator",
@@ -130,7 +130,7 @@ png = { version = "0.18.1" }
 # renderer-software provides a Pure Rust CPU renderer; no GTK/Qt/C++ required.
 # compat-1-2 maintains backward compatibility with 1.x API.
 # backend-winit is NOT included; SlintCtx operates in collection mode for M5.
-slint = { version = "1.16.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+slint = { version = "1.17.0", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
 
 # Dioxus reactive UI — MIT/Apache-2.0; optional adapter
 # minimal feature: macro + html + signals + hooks + launch — Pure Rust, no wry/tao/WebKit.
