@@ -6,7 +6,7 @@
 //! frame starts, because `run_ui` rebuilds the input state from `RawInput`
 //! clearing any previously pushed events.
 //!
-//! API deviation notes (egui 0.34.3):
+//! API deviation notes (egui 0.35.0):
 //! - `egui::Event::CompositionStart / CompositionUpdate / CompositionEnd` do not
 //!   exist.  The spec references fictional `egui` composition variants; the real
 //!   API is `egui::Event::Ime(egui::ImeEvent::Preedit/Commit/Enabled/Disabled)`.
@@ -14,6 +14,10 @@
 //! - `egui::Context` has no public getter that returns the current
 //!   `FontDefinitions`; font-load success is verified via `Result::is_ok()` and
 //!   a subsequent frame render, not by inspecting the definition map.
+//! - As of egui 0.35, `ImeEvent::Preedit` is a struct variant
+//!   `{ text: String, active_range_chars: Option<Range<usize>> }` rather than
+//!   the old `Preedit(String)` tuple variant (egui <= 0.34). `ImeEvent::Commit`
+//!   is unchanged (still a bare `Commit(String)` tuple variant).
 
 use oxiui_core::{Key, Modifiers, MouseButton, UiCtx, Widget};
 use oxiui_egui::{
@@ -44,7 +48,7 @@ fn make_ctx() -> egui::Context {
 /// `InputState` from the supplied `RawInput`, clearing pushed events.
 ///
 /// Deviation: the spec mentions `CompositionStart / CompositionUpdate`; those
-/// variants do not exist in egui 0.34.3.  We exercise `ImeEvent::Preedit`
+/// variants do not exist in egui 0.35.0.  We exercise `ImeEvent::Preedit`
 /// which is what `forward_event_to_egui` actually emits.
 #[test]
 fn test_ime_preedit_event_pushes_to_queue() {
@@ -59,12 +63,117 @@ fn test_ime_preedit_event_pushes_to_queue() {
         let found = i.events.iter().any(|e| {
             matches!(
                 e,
-                egui::Event::Ime(egui::ImeEvent::Preedit(s)) if s == "こんにちは"
+                egui::Event::Ime(egui::ImeEvent::Preedit { text: s, .. }) if s == "こんにちは"
             )
         });
         assert!(
             found,
             "ImePreedit should push Ime(Preedit(..)) into egui event queue"
+        );
+    });
+}
+
+// ── 1b. test_ime_preedit_cursor_range_converted_to_chars ─────────────────────
+
+/// `UiEvent::ImePreedit`'s `cursor` is a **byte**-offset `(start, end)` range.
+/// egui 0.35's `ImeEvent::Preedit::active_range_chars` is a **char**-offset
+/// `Range<usize>`. `forward_event_to_egui` must convert between the two
+/// (mirroring the conversion `egui-winit` performs for real OS IME events)
+/// rather than dropping the cursor hint, as egui <= 0.34 forced.
+#[test]
+fn test_ime_preedit_cursor_range_converted_to_chars() {
+    let ctx = make_ctx();
+    // ASCII text: byte offsets and char offsets coincide here, so this alone
+    // would not catch a byte/char mix-up — see the multi-byte variant below.
+    let event = oxiui_core::UiEvent::ImePreedit {
+        text: "abcdef".to_owned(),
+        cursor: Some((2, 4)),
+    };
+    forward_event_to_egui(&ctx, &event);
+
+    ctx.input(|i| {
+        let found = i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    active_range_chars: Some(range),
+                    ..
+                }) if *range == (2..4)
+            )
+        });
+        assert!(
+            found,
+            "cursor Some((2, 4)) on ASCII text must produce active_range_chars == Some(2..4)"
+        );
+    });
+}
+
+// ── 1c. test_ime_preedit_cursor_range_converted_for_multibyte_text ───────────
+
+/// Same conversion as above, but over text containing multi-byte UTF-8
+/// characters, to prove the conversion counts **chars**, not bytes.
+/// "こんにちは" is 5 chars / 15 bytes (3 UTF-8 bytes per hiragana char); the
+/// byte range covering the 2nd and 3rd characters ("ん" and "に") is
+/// `(3, 9)`, which must convert to the char range `1..3`.
+#[test]
+fn test_ime_preedit_cursor_range_converted_for_multibyte_text() {
+    let ctx = make_ctx();
+    let text = "こんにちは";
+    assert_eq!(text.len(), 15, "each hiragana char is 3 UTF-8 bytes");
+    let event = oxiui_core::UiEvent::ImePreedit {
+        text: text.to_owned(),
+        cursor: Some((3, 9)),
+    };
+    forward_event_to_egui(&ctx, &event);
+
+    ctx.input(|i| {
+        let found = i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    active_range_chars: Some(range),
+                    ..
+                }) if *range == (1..3)
+            )
+        });
+        assert!(
+            found,
+            "byte range (3, 9) over multi-byte text must convert to char range 1..3"
+        );
+    });
+}
+
+// ── 1d. test_ime_preedit_invalid_cursor_range_falls_back_to_none ────────────
+
+/// A `cursor` range that does not land on a UTF-8 char boundary (or is out of
+/// bounds) must not panic; `forward_event_to_egui` falls back to
+/// `active_range_chars: None`, matching how `egui-winit` treats invalid
+/// ranges reported by the OS IME.
+#[test]
+fn test_ime_preedit_invalid_cursor_range_falls_back_to_none() {
+    let ctx = make_ctx();
+    let text = "こんにちは";
+    // Byte offset 1 sits inside the first 3-byte character — not a char
+    // boundary — so the naive slice would panic without the `str::get` guard.
+    let event = oxiui_core::UiEvent::ImePreedit {
+        text: text.to_owned(),
+        cursor: Some((1, 4)),
+    };
+    forward_event_to_egui(&ctx, &event);
+
+    ctx.input(|i| {
+        let found = i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    active_range_chars: None,
+                    text: t,
+                }) if t == text
+            )
+        });
+        assert!(
+            found,
+            "an off-char-boundary cursor range must fall back to active_range_chars: None, not panic"
         );
     });
 }
@@ -78,7 +187,10 @@ fn test_ime_preedit_event_pushes_to_queue() {
 fn test_ime_preedit_no_panic_in_frame() {
     let ctx = make_ctx();
     let raw_input = egui::RawInput {
-        events: vec![egui::Event::Ime(egui::ImeEvent::Preedit("abc".to_owned()))],
+        events: vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "abc".to_owned(),
+            active_range_chars: None,
+        })],
         ..Default::default()
     };
     // Panics would propagate out of run_ui and fail this test.
@@ -116,7 +228,7 @@ fn test_ime_commit_event_pushes_to_queue() {
 /// Verify that injecting `CompositionEnd` (ImeCommit) via `RawInput` and
 /// running a frame does not panic.
 ///
-/// Deviation: egui 0.34.3 has no `CompositionEnd`; `ImeEvent::Commit` is the
+/// Deviation: egui 0.35.0 has no `CompositionEnd`; `ImeEvent::Commit` is the
 /// equivalent.
 #[test]
 fn test_ime_commit_no_panic_in_frame() {

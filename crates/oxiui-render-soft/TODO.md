@@ -52,9 +52,9 @@ signature changes; no new deps.
 - [x] Alpha blending: source-over compositing, pre-multiplied alpha, blend modes (multiply, screen, overlay, darken, lighten)
 - [x] Gradient rendering: linear gradient (direction + color stops, interpolation in sRGB), radial gradient (center + radius + stops)
 - [x] Image blitting: copy pixel rectangle from source to destination with alpha blending, nearest-neighbor and bilinear scaling, nine-slice stretching
-- [x] Text glyph blitting: `blit_glyph_bitmap()` primitive implemented in `backend.rs`; `DrawCommand::DrawText` wired with visible placeholder fill (10% opacity rect); full shaper blocked on adding `oxiui-text` dep (zero-new-deps constraint for this slice).
-    - **Deviation:** `DrawText` variant carries only raw `text: String + FontSpec` — no pre-rasterised bitmaps. Shaping requires `oxiui-text::TextPipeline` which is outside the zero-deps constraint. `supports_text()` stays `false` (honest reporting). The `blit_glyph_bitmap(fb, ox, oy, w, h, pixels, color)` primitive is ready for wiring once the dep is allowed.
-    - **Status 2026-05-29:** Primitive + tests shipped; full pipeline integration deferred to slice C or when `oxiui-text` dep is permitted.
+- [x] Text glyph blitting: `blit_glyph_bitmap()` primitive implemented in `backend.rs`. `DrawCommand::DrawText` now shapes through the full `oxiui-text` pipeline rather than the original placeholder fill — see the "Goal/Design" below and the `oxiui-text` integration item under Integration.
+    - **Historical note (2026-05-29 slice):** at the time, `DrawText` carried only raw `text: String + FontSpec` with no pre-rasterised bitmaps, shaping via `oxiui-text::TextPipeline` was outside that slice's zero-new-deps constraint, and `supports_text()` stayed `false`. Superseded once the `text` feature (now default-on) was added.
+    - **Status:** Primitive shipped 2026-05-29; full pipeline integration (below) landed once the `oxiui-text` dep was permitted.
   - **Goal:** `SoftBackend` renders real text. The `DrawText` arm shapes via `oxiui-text` and blits glyph coverage bitmaps into the framebuffer, clip-aware. `supports_text()` returns `true` under the `text` feature.
   - **Design:** In the `DrawText` arm (`backend.rs:277`), call `pipeline.render(text, style) → RenderResult{glyphs, bitmaps}`; for each `PositionedGlyph` use the shaper-provided position, fetch its greyscale `Bitmap`, and blit via a clip-aware variant of `blit_glyph_bitmap` (intersect with active clip rect). Tint by DrawText color. Cache one `TextPipeline` on `SoftBackend`. Gated `#[cfg(feature = "text")]`. **Framebuffer storage stays straight-alpha `0xAARRGGBB` — premult only inside composite step.**
   - **Files:** `crates/oxiui-render-soft/src/{backend.rs,lib.rs,headless.rs}`.
@@ -73,12 +73,12 @@ signature changes; no new deps.
     - `Path::fill_clipped` and `Path::stroke_clipped` added to `path.rs`, routing through `fill_polygon_clipped`.
     - Clip-aware `Canvas` methods added: `fill_path`, `stroke_path`, `fill_linear_gradient_cmd`, `fill_radial_gradient_cmd`, `box_shadow_cmd`.
     - Mandatory clip-guard tests verified: `fill_path_respects_active_clip`, `gradient_respects_active_clip`, `radial_gradient_respects_active_clip`, `stroke_path_respects_active_clip`.
-    - `supports_blur/gradients/paths/images=true`, `supports_text=false` (v1, no shaper wired).
-- [x] `DrawList` consumer: SoftBackend dispatches all DrawCommand variants. All variants have non-stub handlers except DrawText, which is a documented no-op (shaper dep blocked; `supports_text()==false`). Verified by `draw_text_noop_execute_succeeds` test (execute returns Ok; background unchanged).
-  - **Goal:** All `DrawList` / `DrawCommand` variants dispatched (DrawText is the last no-op). Covered by S1 wiring: when `DrawText` is wired, the consumer is complete.
-  - **Design:** Same as item 1 above (same subagent, same files). No separate implementation needed.
+    - `supports_blur/gradients/paths/images=true` always; `supports_text` now reports `self.text_pipeline.is_some()` under the (default-on) `text` feature, `false` without it.
+- [x] `DrawList` consumer: `SoftBackend` dispatches all `DrawCommand` variants, including `DrawText` — under the (default-on) `text` feature it shapes and blits real glyphs via the cached `TextPipeline`; without the feature it is silently consumed (no panic, background unchanged). Verified by `draw_text_produces_pixels` and `draw_text_clip_rect_excludes` (`#[cfg(feature = "text")]`) plus `supports_text_false_without_feature`.
+  - **Goal (achieved):** All `DrawList` / `DrawCommand` variants dispatched, DrawText included — see the `oxiui-text` integration item under Integration.
+  - **Design:** Same as item 1 above (same subagent, same files).
   - **Files:** Same as item 1.
-  - **Tests:** After S1, dispatch `DrawCommand::DrawText("hello", ...)` and verify non-zero pixels rendered.
+  - **Tests:** `draw_text_produces_pixels` (non-zero pixels rendered for "A"), `draw_text_clip_rect_excludes` (clip-aware).
   - **Risk:** None beyond item 1 risks.
 - [x] `SoftRenderer::with_size(width, height)` constructor added to `lib.rs`. Test `soft_renderer_with_size_constructs` passes.
 - [x] Configurable quality: `AaMode{None,Msaa4x,Supersampling}`, `ShadowQuality{Off,Low,High}`, `SoftRenderQuality` with `low()/balanced()/high()` presets added to `lib.rs`. `SoftBackend::with_quality(w,h,q)` constructor added. AA flag wired: `canvas.set_aa(aa_enabled)` called in `execute()`, propagated into `fill_path`/`stroke_path` → `fill_polygon_clipped`/`stroke_contour_clipped_inner` via `fill_clipped_aa`/`stroke_clipped_aa`. Shadow dispatch wired (`ShadowQuality::Off` skips Gaussian blur entirely). Tests: `quality_low_aa_mode_is_none`, `quality_high_aa_mode_is_supersampling`, `soft_backend_with_quality_*`.
@@ -94,15 +94,15 @@ signature changes; no new deps.
 - [x] Gradient: linear gradient from red to blue, verify midpoint pixel is purple
 - [x] Clip region: draw rect partially outside clip, verify clipped pixels are untouched
 - [x] Image blitting: blit a 2x2 test image scaled to 4x4, verify nearest-neighbor interpolation
-- [x] Glyph blitting: blit a synthetic 8x8 glyph bitmap, verify correct placement and color tinting — deferred with the consumer item.
-  - **Goal:** A synthetic 8x8 coverage bitmap blits to the expected framebuffer pixels.
-  - **Design:** Part of S1 test suite — covered by the S1 glyph-blitting tests in backend.rs tests module.
+- [x] Glyph blitting: blit a synthetic glyph bitmap, verify correct placement and color tinting — landed alongside the `DrawList` consumer item above.
+  - **Goal:** A rasterised glyph coverage bitmap blits to the expected framebuffer pixels.
+  - **Design:** Covered by the `text`-feature tests in `backend.rs`'s test module.
   - **Files:** `crates/oxiui-render-soft/src/backend.rs` (test module).
-  - **Tests:** Covered by S1 "single-glyph coverage at known origin" test.
+  - **Tests:** `draw_text_produces_pixels` (single-glyph coverage), `draw_text_clip_rect_excludes` (clip-aware).
   - **Risk:** None.
 - [x] Headless rendering: `render_headless_once(100, 100, |fb| draw_rect(fb))` returns non-zero pixels
 - [x] PNG round-trip: render to framebuffer, export to PNG, read back PNG, compare pixel values
-- [x] Snapshot tests: render reference scenes, compare against golden PNG baselines — deferred to follow-ups.
+- [x] Snapshot tests: `tests/snapshot_tests.rs` (12 tests) renders reference scenes — gradients, layered/multi-layer alpha blend, rounded rect, clipped/nested-clip gradients, shadow, path fill, dithered pattern — and asserts specific pixel values at known coordinates (deterministic, no golden files). Byte-stable golden-PNG-baseline comparison under `tests/snapshots/` remains a follow-up.
 - [x] Benchmark: fill 10,000 rectangles in a 1920x1080 framebuffer, measure ms/frame — `benches/rects.rs` with criterion; covers `fill_10k_rects/1920x1080`, parametric `fill_rect`, `simd_fill_solid`, `linear_gradient`, `alpha_blend_row`, `png_encode` benchmarks.
 
 ## Performance
@@ -137,18 +137,16 @@ signature changes; no new deps.
 - [x] COOLJAPAN ecosystem: PNG encoding via Pure Rust `png` crate (no stb_image, no libpng) ✓; no `tiny-skia` ✓; no `zip`/`flate2`/`zstd`/`bzip2`/`lz4` ✓; no `bincode` ✓; no `openblas` ✓; no `rustfft` ✓. OxiFFT (0.3.2) added as optional `fft-blur` feature — `fft_blur.rs` provides `gaussian_blur_alpha_fft` using `convolve_mode` for large kernel (radius ≥ 32px) blur; `should_use_fft_blur` threshold helper. Tests: 7 unit tests (threshold, symmetry, FFT-vs-direct match under `fft-blur` feature). All default features are 100% Pure Rust.
 
 ## Proposed follow-ups
-- `RenderBackend` trait + `DrawList` consumer items (cross-crate, blocked on
-  `oxiui-core` design of the trait + command buffer).
-- Glyph blitting (blocked on `oxiui-text` `TextPipeline` consumer producing
-  alpha-coverage bitmaps + advance metrics).
-- Dirty-region tracking + invalidation (cross-crate; needs `oxiui-core`
-  widget invalidation hooks).
-- SIMD-accelerated pixel fill (`std::simd` once stable, or `wide` Pure-Rust).
-- Parallel tile rendering (rayon) — tile iterator already lands; just needs
-  the parallel driver + a safe per-tile scratch framebuffer.
-- Premultiplied-alpha through-pipeline (full refactor away from straight-alpha
-  composite path — helpers exist in `blend.rs`).
-- Performance benchmarks via the `bench` skill + criterion (e.g. 10k rects in
-  1920×1080; AET polygon throughput; Gaussian blur throughput).
+- Dirty-region tracking is fully implemented and tested within this crate
+  (`tile::DirtyRegion`), but nothing yet drives it from `oxiui-core` widget
+  invalidation — wiring "which widgets changed" through to `mark_rect`/
+  `mark_tile` calls is still cross-crate future work.
+- Premultiplied-alpha through-pipeline: `blend::composite_into`'s `Normal`-mode
+  fast path already blends in integer premultiplied-alpha space, but the
+  primary per-pixel path (`Framebuffer::blend`, used by `scanline`/`draw.rs`
+  fills) still does straight-alpha float division per pixel. A full refactor
+  to premultiplied math throughout remains open.
 - Golden-image snapshot tests with byte-stable PNG baselines under
-  `tests/snapshots/`.
+  `tests/snapshots/` — `tests/snapshot_tests.rs` already covers reference
+  scenes with embedded deterministic pixel-value assertions (no golden files
+  yet); PNG-baseline comparison is the remaining step.

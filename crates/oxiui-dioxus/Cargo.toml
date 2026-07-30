@@ -7,8 +7,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiUI adapter for the Dioxus reactive UI framework (optional)"
+readme = "README.md"
 categories = ["gui", "rendering"]
 keywords = ["gui", "dioxus", "cooljapan", "pure-rust", "oxiui"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["dioxus"]  # optional dep for M6 dioxus-native rendering; only referenced in doc examples today
 
 [features]
 default = []

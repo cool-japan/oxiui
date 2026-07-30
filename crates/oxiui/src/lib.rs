@@ -431,12 +431,13 @@ impl Default for HotkeyRegistry {
     }
 }
 
+// ─── Shared no-op UiCtx (headless paths + lifecycle hooks) ────────────────────
+mod null_ctx;
+use null_ctx::NullUiCtx;
+
 // ─── iced backend (extracted to iced_backend.rs for line-count compliance) ────
 #[cfg(feature = "iced")]
 mod iced_backend;
-// Re-export as `iced_app` to preserve existing call-sites in run_iced().
-#[cfg(feature = "iced")]
-use iced_backend as iced_app;
 
 // ─── App builder ─────────────────────────────────────────────────────────────
 
@@ -700,11 +701,13 @@ impl App {
         self
     }
 
-    /// Register a closure to be called when the window is closed.
+    /// Register a closure to be called when the window is closing.
     ///
-    /// Invoked on the egui-path inside `OxiEguiApp` (not yet on iced-path;
-    /// iced has no per-close callback surface in 0.14). In headless mode this
-    /// hook is never fired (there is no window to close).
+    /// Fired on the egui path from `eframe::App::on_exit`, and on the iced path
+    /// from the `CloseRequested` window event (before the window is closed).
+    /// In headless mode ([`App::run_headless_once`]) it fires once after the
+    /// single frame, so teardown / persistence still runs deterministically.
+    /// Hooks receive a no-op [`UiCtx`] (there is no live drawing frame at close).
     pub fn on_close<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut dyn UiCtx) + Send + Sync + 'static,
@@ -715,10 +718,10 @@ impl App {
 
     /// Register a closure to be called when the window is resized.
     ///
-    /// Currently stored and available for inspection; egui and iced do not yet
-    /// expose a per-resize callback in the same form — this hook is fired from
-    /// the headless path for testability and will be wired into the real backends
-    /// once the event surface is stable.
+    /// Fired on the egui path each frame the viewport size changes, and on the
+    /// iced path from the window `Resized` event. Duplicate sizes are
+    /// suppressed by the backend's [`runner::LifecycleTracker`], so the hook
+    /// only runs on a real size change. Hooks receive a no-op [`UiCtx`].
     pub fn on_resize<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut dyn UiCtx) + Send + Sync + 'static,
@@ -729,7 +732,10 @@ impl App {
 
     /// Register a closure to be called when the window gains or loses focus.
     ///
-    /// Same status as `on_resize` — stored, testable, not yet wired into live backends.
+    /// Fired on the egui path when the polled focus state flips, and on the iced
+    /// path from the `Focused` / `Unfocused` window events. Duplicate states are
+    /// suppressed by the backend's [`runner::LifecycleTracker`]. Hooks receive a
+    /// no-op [`UiCtx`].
     pub fn on_focus<F>(mut self, f: F) -> Self
     where
         F: FnMut(&mut dyn UiCtx) + Send + Sync + 'static,
@@ -874,15 +880,6 @@ impl App {
         self,
         content: impl FnOnce(&mut dyn UiCtx) -> T + 'static,
     ) -> Result<T, UiError> {
-        struct NullUiCtx;
-        impl UiCtx for NullUiCtx {
-            fn heading(&mut self, _text: &str) {}
-            fn label(&mut self, _text: &str) {}
-            fn button(&mut self, _label: &str) -> ButtonResponse {
-                ButtonResponse::default()
-            }
-        }
-
         let mut null = NullUiCtx;
         let result = content(&mut null);
         Ok(result)
@@ -1004,17 +1001,40 @@ impl App {
             initial
         });
 
-        let mut content_fn = content;
-        let path = storage_path.clone();
+        // Share the live state between the per-frame content closure and the
+        // on_close persistence hook. `Arc<Mutex<State>>` is `Send + Sync` when
+        // `State: Send`, satisfying both the `ContentFn` (`Send`) and `HookFn`
+        // (`Send + Sync`) bounds.
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(loaded));
 
-        self.with_state(loaded, move |ui, s| {
-            content_fn(ui, s);
-        })
-        // After `with_state` wraps the closure, persist on drop is deferred;
-        // for headless paths we persist immediately after run_headless_once.
-        // Full persistence-on-close is wired in on_close hook below.
-        .on_close(move |_ui| {
-            let _ = path; // path captured for future on_close wiring (full backends)
+        let content_shared = std::sync::Arc::clone(&shared);
+        let mut content_fn = content;
+        let app = self.content(move |ui| {
+            if let Ok(mut guard) = content_shared.lock() {
+                content_fn(ui, &mut guard);
+            }
+        });
+
+        let close_shared = std::sync::Arc::clone(&shared);
+        let path = storage_path;
+        app.on_close(move |_ui| {
+            let Ok(guard) = close_shared.lock() else {
+                eprintln!(
+                    "oxiui: state save skipped ({}): lock poisoned",
+                    path.display()
+                );
+                return;
+            };
+            match oxicode::encode_to_vec(&*guard) {
+                Ok(bytes) => {
+                    if let Err(e) = std::fs::write(&path, &bytes) {
+                        eprintln!("oxiui: state save to {}: {e}", path.display());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("oxiui: state encode for {}: {e}", path.display());
+                }
+            }
         })
     }
 
@@ -1297,7 +1317,7 @@ impl App {
     pub fn run(self) -> Result<AppExit, UiError> {
         #[cfg(feature = "iced")]
         if let Backend::Iced = &self.backend {
-            return self.run_iced();
+            return self.run_iced_backend();
         }
 
         #[cfg(feature = "dioxus")]
@@ -1305,7 +1325,26 @@ impl App {
             return self.run_dioxus_backend();
         }
 
-        self.run_egui_or_fallback()
+        self.run_egui_dispatch()
+    }
+
+    /// Build a [`LifecycleConfig`] by taking the app's lifecycle hook vectors.
+    #[cfg(any(feature = "egui", feature = "iced"))]
+    fn take_lifecycle(&mut self) -> LifecycleConfig {
+        LifecycleConfig {
+            on_close: std::mem::take(&mut self.on_close),
+            on_resize: std::mem::take(&mut self.on_resize),
+            on_focus: std::mem::take(&mut self.on_focus),
+        }
+    }
+
+    /// Take the content closure, substituting a no-op frame closure when unset.
+    ///
+    /// Backends always receive a live `ContentFn`; an app with no content simply
+    /// renders empty frames.
+    #[cfg(any(feature = "egui", feature = "iced"))]
+    fn take_content(&mut self) -> ContentFn {
+        self.content.take().unwrap_or_else(|| Box::new(|_ui| {}))
     }
 
     #[cfg(feature = "dioxus")]
@@ -1321,157 +1360,45 @@ impl App {
         }
     }
 
+    /// Dispatch to the iced backend by moving the app's state into an [`IcedRunner`].
     #[cfg(feature = "iced")]
-    fn run_iced(self) -> Result<AppExit, UiError> {
-        use std::cell::{Cell, RefCell};
-        use std::collections::{HashMap, HashSet};
-
-        use oxiui_iced::palette_to_iced_theme;
-
-        let iced_theme = {
-            let palette = self.theme.palette().clone();
-            palette_to_iced_theme(&palette)
+    fn run_iced_backend(mut self) -> Result<AppExit, UiError> {
+        let lifecycle = self.take_lifecycle();
+        let content = self.take_content();
+        let runner = IcedRunner {
+            theme: self.theme,
+            on_init: std::mem::take(&mut self.on_init),
+            on_frame: std::mem::take(&mut self.on_frame),
+            plugins: std::mem::take(&mut self.plugins),
         };
-
-        // Sort plugins by priority before handing off to the iced state.
-        let mut plugins = self.plugins;
-        plugins.sort_by_key(|p| p.priority());
-
-        let state = iced_app::OxiIcedState {
-            title: self.config.title.clone(),
-            content: RefCell::new(self.content),
-            pending_clicks: RefCell::new(HashSet::new()),
-            widget_state: RefCell::new(HashMap::new()),
-            on_init: RefCell::new(self.on_init),
-            on_frame: RefCell::new(self.on_frame),
-            plugins: RefCell::new(plugins),
-            initialised: Cell::new(false),
-        };
-
-        iced_app::run(state, iced_theme, self.config.width, self.config.height)
-            .map(|()| AppExit::Ok)
-            .map_err(|e| UiError::Backend(e.to_string()))
+        Box::new(runner).run(self.config, content, lifecycle)
     }
 
-    #[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
-    fn run_egui_or_fallback(mut self) -> Result<AppExit, UiError> {
-        use eframe::NativeOptions;
-        use oxiui_egui::palette_to_egui_visuals;
-
-        let palette = self.theme.palette().clone();
-        let title = self.config.title.clone();
-        let width = self.config.width;
-        let height = self.config.height;
-        let visuals = palette_to_egui_visuals(&palette);
-        let content_fn = self.content.take();
-        let extra_fonts = std::mem::take(&mut self.config.extra_fonts);
-
-        // Sort plugins by priority (ascending).
-        self.plugins.sort_by_key(|p| p.priority());
-
-        // Decode the window icon (if provided) to egui::IconData.
-        let icon_data: Option<std::sync::Arc<egui::IconData>> =
-            if let Some(icon_bytes) = &self.config.icon {
-                match crate::icon::decode_icon(icon_bytes) {
-                    Ok(data) => Some(std::sync::Arc::new(data)),
-                    Err(e) => {
-                        // Non-fatal: log and continue without an icon.
-                        eprintln!("oxiui: failed to decode window icon: {e}");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-        // Build the egui ViewportBuilder with all configured props.
-        let mut vp = egui::ViewportBuilder::default()
-            .with_title(&title)
-            .with_inner_size([width, height])
-            .with_resizable(self.config.resizable)
-            .with_decorations(self.config.decorations)
-            .with_transparent(self.config.transparent);
-
-        if self.config.always_on_top {
-            vp = vp.with_always_on_top();
-        }
-        if let Some((min_w, min_h)) = self.config.min_size {
-            vp = vp.with_min_inner_size([min_w, min_h]);
-        }
-        if let Some((max_w, max_h)) = self.config.max_size {
-            vp = vp.with_max_inner_size([max_w, max_h]);
-        }
-        if let Some((px, py)) = self.config.position {
-            vp = vp.with_position([px, py]);
-        }
-        if let Some(icon) = icon_data {
-            vp = vp.with_icon(icon);
-        }
-
-        let native_opts = NativeOptions {
-            viewport: vp,
-            ..Default::default()
+    /// Dispatch to the egui backend by moving the app's state into an [`EguiRunner`].
+    ///
+    /// The runner owns the live `eframe::run_native` path (native) and returns
+    /// [`UiError::Unsupported`] on wasm32 (where `oxiui_web::mount` is used
+    /// instead).
+    #[cfg(feature = "egui")]
+    fn run_egui_dispatch(mut self) -> Result<AppExit, UiError> {
+        let lifecycle = self.take_lifecycle();
+        let content = self.take_content();
+        let runner = EguiRunner {
+            theme: self.theme,
+            on_init: std::mem::take(&mut self.on_init),
+            on_frame: std::mem::take(&mut self.on_frame),
+            plugins: std::mem::take(&mut self.plugins),
+            frame_skip: self.frame_skip,
+            egui_frame_hooks: std::mem::take(&mut self.egui_frame_hooks),
         };
-
-        let frame_skip = self.frame_skip;
-        let egui_frame_hooks = std::mem::take(&mut self.egui_frame_hooks);
-
-        eframe::run_native(
-            &title,
-            native_opts,
-            Box::new(move |cc| {
-                cc.egui_ctx.set_visuals(visuals.clone());
-                if !extra_fonts.is_empty() {
-                    let refs: Vec<(&str, Vec<u8>)> = extra_fonts
-                        .iter()
-                        .map(|(n, b)| (n.as_str(), b.clone()))
-                        .collect();
-                    let _ = oxiui_egui::load_fonts_into_egui(&refs, &cc.egui_ctx);
-                }
-                Ok(Box::new(OxiEguiApp {
-                    content: content_fn,
-                    on_init: self.on_init,
-                    on_frame: self.on_frame,
-                    plugins: self.plugins,
-                    initialised: false,
-                    frame_skip,
-                    egui_frame_hooks,
-                }))
-            }),
-        )
-        .map(|()| AppExit::Ok)
-        .map_err(|e| UiError::Backend(e.to_string()))
+        Box::new(runner).run(self.config, content, lifecycle)
     }
 
-    // On wasm32 with the `egui` feature, `eframe::run_native` does not exist.
-    // The wasm32 egui path uses `eframe::WebRunner` instead (wired in `oxiui-web`).
-    #[cfg(all(feature = "egui", target_arch = "wasm32"))]
-    fn run_egui_or_fallback(self) -> Result<AppExit, UiError> {
-        let _ = &self.config;
-        let _ = &self.theme;
-        let _ = &self.content;
-        let _ = &self.backend;
-        let _ = &self.on_init;
-        let _ = &self.on_frame;
-        let _ = &self.plugins;
-        let _ = &self.frame_skip;
-        let _ = &self.egui_frame_hooks;
-        Err(UiError::Unsupported(
-            "On wasm32, use `oxiui_web::mount(canvas_id)` instead of App::run().".to_string(),
-        ))
-    }
-
+    /// Fallback dispatch when no GUI backend feature is enabled.
     #[cfg(not(feature = "egui"))]
-    fn run_egui_or_fallback(self) -> Result<AppExit, UiError> {
-        // Reference fields to suppress dead-code diagnostics under this cfg path.
-        let _ = &self.config;
-        let _ = &self.theme;
-        let _ = &self.content;
-        let _ = &self.backend;
-        let _ = &self.on_init;
-        let _ = &self.on_frame;
-        let _ = &self.plugins;
-        let _ = &self.frame_skip;
+    fn run_egui_dispatch(self) -> Result<AppExit, UiError> {
+        // No backend can consume the configured app; drop it explicitly.
+        drop(self);
         Err(UiError::Unsupported(
             "No UI backend enabled. Use default features or enable `egui`.".to_string(),
         ))
@@ -1485,18 +1412,15 @@ impl App {
     /// that content closures run without panic, and for CI environments that
     /// have no display server.
     ///
+    /// The single frame is bracketed by the full lifecycle: `on_init` + plugin
+    /// `init`, then `content`, then `on_frame` + plugin `update`, and finally
+    /// `on_close` (the headless "session" ends when the one frame completes).
+    /// Firing `on_close` here means persistence wired through
+    /// [`App::with_persistent_state`] is exercised by headless runs.
+    ///
     /// # Errors
     /// Currently infallible; always returns `Ok(AppExit::Ok)`.
     pub fn run_headless_once(mut self) -> Result<AppExit, UiError> {
-        struct NullUiCtx;
-        impl UiCtx for NullUiCtx {
-            fn heading(&mut self, _text: &str) {}
-            fn label(&mut self, _text: &str) {}
-            fn button(&mut self, _label: &str) -> ButtonResponse {
-                ButtonResponse::default()
-            }
-        }
-
         // Sort plugins by priority.
         self.plugins.sort_by_key(|p| p.priority());
 
@@ -1523,6 +1447,12 @@ impl App {
         // Fire plugin update.
         for plugin in self.plugins.iter_mut() {
             plugin.update(&mut null);
+        }
+
+        // The headless session ends after one frame: fire on_close hooks so
+        // persist-on-close (and any user teardown) runs deterministically.
+        for hook in self.on_close.iter_mut() {
+            hook(&mut null);
         }
 
         Ok(AppExit::Ok)
@@ -1553,10 +1483,9 @@ impl App {
 }
 
 // ─── OxiEguiApp (native egui integration, extracted to egui_backend.rs) ──────
+// `EguiRunner::run_native` constructs `crate::egui_backend::OxiEguiApp` directly.
 #[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
 mod egui_backend;
-#[cfg(all(feature = "egui", not(target_arch = "wasm32")))]
-use egui_backend::OxiEguiApp;
 
 // ─── Memory baseline utility ─────────────────────────────────────────────────
 

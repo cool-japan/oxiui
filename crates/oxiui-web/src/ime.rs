@@ -73,7 +73,6 @@ pub fn ime_full_cycle(
 /// # Errors
 ///
 /// Returns `Err` with a description string if any DOM binding fails.
-#[allow(unused_variables)]
 pub fn bind_ime_events<F>(on_event: F) -> Result<(), String>
 where
     F: Fn(UiEvent) + 'static,
@@ -154,6 +153,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = on_event;
         Ok(())
     }
 }

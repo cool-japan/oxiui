@@ -222,7 +222,6 @@ impl TrayHandle {
     ///
     /// Returns `Err(String)` if the tray icon could not be created (e.g. no
     /// system tray available, bad icon bytes, etc.).
-    #[allow(unused_variables)]
     pub fn mount(config: TrayConfig) -> Result<Self, String> {
         #[cfg(feature = "tray")]
         {
@@ -306,6 +305,7 @@ impl TrayHandle {
         }
         #[cfg(not(feature = "tray"))]
         {
+            let _ = config;
             Ok(TrayHandle {
                 _marker: std::marker::PhantomData,
             })
@@ -316,7 +316,6 @@ impl TrayHandle {
     ///
     /// On non-tray builds or when the tray icon is not yet mounted this is a
     /// no-op that always returns `Ok(())`.
-    #[allow(unused_variables)]
     pub fn set_tooltip(&self, tip: &str) -> Result<(), String> {
         #[cfg(feature = "tray")]
         {
@@ -324,6 +323,10 @@ impl TrayHandle {
                 ._tray
                 .set_tooltip(Some(tip))
                 .map_err(|e| format!("set_tooltip failed: {e}"))?;
+        }
+        #[cfg(not(feature = "tray"))]
+        {
+            let _ = tip;
         }
         Ok(())
     }

@@ -11,7 +11,7 @@ Everything is expressed in terms of `oxiui-core`'s `Theme`, `Palette`, `Color`, 
 
 ```toml
 [dependencies]
-oxiui-theme = "0.1.3"
+oxiui-theme = "0.2.1"
 ```
 
 ## Quick Start
@@ -173,6 +173,10 @@ Free functions over `oxiui_core::Color`: `lerp`, `mix`, `lighten`, `darken`, `wi
 ### `gallery` module — ready-made palettes
 
 `make_nord_dark`, `make_nord_light`, `make_dracula`, `make_solarized_dark`, `make_solarized_light`, `make_catppuccin_mocha`, `make_catppuccin_latte`, `make_material_dark`, `make_material_light` — each returns a `CooljapanTheme`.
+
+### `serial` module — theme serialization
+
+`ThemeSnapshot { tokens, typography, palette, body_font }` — a round-trippable snapshot of a theme's design tokens, typography scale, palette, and body font. `serialize_theme(&ThemeSnapshot) -> Result<Vec<u8>, UiError>` / `deserialize_theme(&[u8]) -> Result<ThemeSnapshot, UiError>` encode/decode it via `oxicode` (no bincode).
 
 ## Tokyo Night palette (default dark)
 

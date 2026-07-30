@@ -7,6 +7,87 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.1] - 2026-07-30
+
+### Added
+
+- **Lifecycle hooks are now live on both backends.** `App::on_close` / `on_resize`
+  / `on_focus` fire from the real event loops: egui polls the viewport size and
+  focus each frame and fires `on_close` from `eframe::App::on_exit`; iced drives
+  them from an `iced::event::listen_with` subscription
+  (`Resized`/`Focused`/`Unfocused`/`CloseRequested`). A new
+  `runner::LifecycleTracker` deduplicates raw snapshots into
+  `runner::LifecycleEvent`s so `on_resize`/`on_focus` fire only on real changes
+  and `on_close` fires at most once. Hooks receive a shared no-op `UiCtx`
+  (lifecycle events fire outside a live drawing frame).
+- **`EguiRunner` / `IcedRunner` are now live `BackendRunner`s.** They carry the
+  app's theme, hooks, and plugins and own the `eframe::run_native` /
+  `iced::application` event loop; `App::run()` moves its state into the matching
+  runner and delegates. `EguiRunner::new()` / `IcedRunner::new()` (and a `theme`
+  setter) construct them for dependency injection / testing.
+- **iced backend honours the configured window size.** `IcedRunner` chains
+  `.window_size(...)` (the `width`/`height` were previously silently discarded)
+  and `.exit_on_close_request(false)` so `on_close` hooks run before the window
+  closes.
+- **`oxiui-egui`: IME preedit cursor position is now forwarded to egui.** egui
+  0.35 added a cursor field to `ImeEvent::Preedit`
+  (`active_range_chars: Option<Range<usize>>`); `forward_event_to_egui` converts
+  `UiEvent::ImePreedit`'s byte-offset `cursor` range to egui's char-offset range
+  (the same conversion `egui-winit` performs for raw OS IME events), using
+  `str::get` so a range that lands off a UTF-8 char boundary degrades to `None`
+  instead of panicking. Previously always dropped, since egui <= 0.34's
+  `ImeEvent::Preedit` was a bare `String` with nowhere to put it.
+
+### Changed
+
+- **`runner::LifecycleConfig` fields are now `Vec<HookFn>`** (`on_close` /
+  `on_resize` / `on_focus`) instead of the previous mismatched single closures,
+  so they carry the app's real hook vectors. This is a visible change to the
+  feature-gated public `LifecycleConfig` type.
+- **`with_persistent_state` now actually persists on close.** State is shared via
+  `Arc<Mutex<_>>` between the content closure and the `on_close` hook, which
+  encodes it with `oxicode` and writes it to the storage path (replacing the old
+  `let _ = path` no-op). `run_headless_once` now fires `on_close` after its single
+  frame, so headless runs persist deterministically.
+- `egui` / `eframe` updated from 0.34.3 to 0.35.0 (source of the `ImeEvent::Preedit`
+  struct-variant change described above).
+- `slint` updated from 1.16.1 to 1.17.0.
+- `oxifft` updated from 0.3.2 to 0.4.1.
+- `wasm-bindgen` updated from 0.2.125 to 0.2.126; `web-sys` updated from 0.3.102 to
+  0.3.103.
+- `oxicode` updated from 0.2.4 to 0.2.5.
+- `oxifont` updated from 0.2.0 to 0.2.1.
+- `oxitext` updated from 0.2.0 to 0.2.1; `oxitext-sdf` updated from 0.2.0 to 0.2.1.
+
+### Fixed
+
+- **`oxiui-render-soft`: `gaussian_blur_alpha_fft` no longer silently no-ops when
+  the `fft-blur` feature is disabled** — it now forwards to the direct
+  `shadow::gaussian_blur_alpha` convolution, so the blur effect still applies. The
+  `fft-blur` feature now only affects performance, not correctness.
+- Replaced every `#[allow(unused_variables)]` across the workspace with explicit
+  `let _ = (...)` discards in the inactive-cfg branch, so the lint no longer masks
+  genuine dead code.
+
+### Security
+
+- **`oxiui-render-soft`: fixed a `u32` overflow in `composite_into`'s bounds
+  check.** The required source length was computed as `w * h * 4` in `u32`,
+  which wraps for large `w`/`h` (e.g. `w = h = 65_536` wraps to exactly `0`),
+  producing a too-small guard value that would defeat the `src.len()` check and
+  let the pixel-copy loop index past the end of `src`. The length is now
+  computed with checked `usize` arithmetic; an overflow is treated as
+  unsatisfiable and the call safely returns `0` instead of reading out of bounds.
+- **`oxiui-render-soft`: fixed unbounded scanline iteration in `fill_polygon`,
+  `fill_polygon_clipped`, and `paint_span`.** A polygon or span with extreme
+  vertex/edge coordinates (e.g. attacker-influenced input far outside the
+  framebuffer) could previously drive billions of empty loop iterations — a
+  denial-of-service. Row and span ranges are now clamped to the framebuffer's
+  own dimensions before iterating, with an edge fast-forward so shapes that are
+  only partially off-screen still render correctly for their visible rows.
+
+---
+
 ## [0.2.0] - 2026-06-23
 
 ### Removed (BREAKING)
@@ -322,6 +403,7 @@ zero FFI under default features.  No GTK, no Qt, no SDL, no AppKit, no Win32.
 - License: Apache-2.0.
 - No `unwrap()` in production code.
 
+[0.2.1]: https://github.com/cool-japan/oxiui/releases/tag/v0.2.1
 [0.2.0]: https://github.com/cool-japan/oxiui/releases/tag/v0.2.0
 [0.1.3]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cool-japan/oxiui/releases/tag/v0.1.2

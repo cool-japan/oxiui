@@ -1,7 +1,17 @@
 # oxiui-egui TODO
 
 ## Status
-Functional egui adapter (~116 SLOC). Implements `MockUiCtx` wrapping `egui::Ui` with heading/label/button forwarding. Provides `palette_to_egui_visuals()` for theme mapping, `forward_event_to_egui()` for IME event injection, and `load_font_into_egui()` for OxiFont byte loading. This is the most complete adapter crate -- the main gaps are expanded widget coverage, richer theme mapping, and accessibility bridging.
+Mature egui adapter (~1330 SLOC, `src/lib.rs`). `EguiUiCtx` implements all `UiCtx`
+widgets (heading/label/button/text_input/checkbox/slider/dropdown/image/separator/
+spacer/scroll_area/tooltip/popup/modal/horizontal/vertical/grid/menu_bar/rich_text/
+drag_source/drop_target). Full keyboard + pointer + IME event forwarding
+(`forward_event_to_egui`, including the egui-0.35 IME preedit cursor range),
+multi-font-family loading, token-driven style mapping (`palette_to_egui_visuals*`,
+`tokens_to_egui_style`), a caching `StatefulEguiAdapter`, an `OxiWidget` bridge for
+embedding OxiUI widgets in egui layouts, and feature-gated `a11y` (AccessKit bridge)
+and `table` (`oxiui-table` bridge) modules. 128 tests pass with `--all-features`.
+Remaining gaps: custom `TextPipeline`-driven text shaping (blocked on an egui text
+injection hook) and wasm32/browser verification (blocked on a WASM test runtime).
 
 ## Core Implementation
 - [x] Expanded `UiCtx` widget forwarding: `text_input()` → `egui::TextEdit::singleline`, `checkbox()` → `egui::Checkbox`, `slider()` → `egui::Slider`, `dropdown()` → `egui::ComboBox`, `image()` → `egui::Image`, `separator()`, `spacer()` (~200 SLOC)
@@ -104,7 +114,7 @@ Functional egui adapter (~116 SLOC). Implements `MockUiCtx` wrapping `egui::Ui` 
 
 ## Integration
 - [x] `oxiui-core` integration: `EguiUiCtx` implements all 16 current `UiCtx` methods including `label_styled`/`heading_styled` (now overridden to forward `TextStyle` fields to `egui::RichText`); `text_input`, `checkbox`, `slider`, `dropdown`, `image`, `separator`, `spacer`, `scroll_area`, `tooltip`, `popup`, `modal`, `horizontal`, `vertical`, `grid`, `menu_bar`, `rich_text`, `drag_source`, `drop_target` all delegating to egui widgets. Verified via `tests/styled_text_tests.rs` (13 tests).
-- [ ] `oxiui-text` integration: optionally bypass egui's text layout and use `TextPipeline` for shaping, feeding egui custom `TextLayoutJob` results. **DEFERRED: egui 0.34 does not expose a stable `TextLayoutJob` injection point from outside; full integration requires upstream egui API (custom text shaping callback); `oxiui_text::TextPipeline::from_bytes` is already used for font validation in `load_font_into_egui`.**
+- [ ] `oxiui-text` integration: optionally bypass egui's text layout and use `TextPipeline` for shaping, feeding egui custom `TextLayoutJob` results. **DEFERRED: egui 0.35 still does not expose a stable `TextLayoutJob` injection point from outside; full integration requires upstream egui API (custom text shaping callback); `oxiui_text::TextPipeline::from_bytes` is already used for font validation in `load_font_into_egui`.**
 - [x] `oxiui-theme` integration: consume `DesignTokens`, `TypographyScale`, `ShadowSpec` for full egui style mapping (not just `Visuals`)
 - [x] `oxiui-table` integration: `Table::render_egui()` already works; expanded table features (sorting, selection) verified via `tests/table_integration_tests.rs` (12 tests covering `HeaderSortState::toggle`, `SelectionModel` single/multi/clear, `EguiTableState` edit/expand, multi-frame stability). Bridge helpers added to `src/lib.rs` under `table_bridge` feature module.
 - [x] `oxiui-accessibility` integration: egui has built-in AccessKit support; `oxiui_egui::a11y` module bridges `A11yTree`→`TreeUpdate` via `oxiui_tree_to_accesskit`, `diff_a11y_trees`, and stateful `A11yEguiBridge`. Verified via `tests/a11y_integration_tests.rs` (15 tests). Feature-gated behind `a11y` Cargo feature.
@@ -112,7 +122,9 @@ Functional egui adapter (~116 SLOC). Implements `MockUiCtx` wrapping `egui::Ui` 
 - [x] COOLJAPAN ecosystem: policy validated — oxiui-egui has zero C/C++ dependencies; egui is Pure Rust; eframe's wgpu backend uses OS-provided GPU drivers loaded at runtime (not linked at compile time). Default features are 100% Pure Rust. All new dependencies (oxiui-table, oxiui-accessibility, accesskit) are Pure Rust.
 
 ## Proposed follow-ups
-- **Multi-font-family support:** FontSpec→FontFamily mapping table; current loader only does Proportional+Monospace.
-- **Rich-text spans forwarding:** needs an OxiUI rich-text input type flowing through UiCtx first.
-- **Full keyboard/event mapping in `forward_event_to_egui`:** KeyDown/Mouse mapping alongside existing IME.
-- **Layout forwarding:** horizontal/vertical/grid layouts need a core UiCtx trait extension first.
+All four follow-ups originally proposed here have since shipped (see Core
+Implementation above): multi-font-family loading, rich-text span forwarding, full
+keyboard/mouse event mapping in `forward_event_to_egui`, and horizontal/vertical/grid
+layout forwarding. The two remaining open items are tracked under Integration:
+`oxiui-text` `TextLayoutJob` injection (blocked on an upstream egui hook) and
+wasm32/browser verification (blocked on a WASM test runtime).

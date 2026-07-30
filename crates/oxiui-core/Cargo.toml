@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Core traits and types for OxiUI — Pure Rust UI layer"
+readme = "README.md"
 categories = ["gui", "rendering"]
 keywords = ["gui", "cooljapan", "oxiui", "pure-rust", "widgets"]
 

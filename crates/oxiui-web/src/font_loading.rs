@@ -81,7 +81,6 @@ pub type FontLoadCallback = Box<dyn FnOnce(Result<String, String>) + 'static>;
 ///
 /// The callback receives `Err` if the font URL is unreachable or the font
 /// format is unsupported.
-#[allow(unused_variables)]
 pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -165,7 +164,6 @@ pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
 ///
 /// On failure the callback receives the first error encountered; successful
 /// faces loaded before the failure may already be registered.
-#[allow(unused_variables)]
 pub fn load_fonts_parallel(requests: Vec<FontLoadRequest>, callback: FontLoadCallback) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -209,6 +207,7 @@ pub fn load_fonts_parallel(requests: Vec<FontLoadRequest>, callback: FontLoadCal
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = requests;
         callback(Ok(String::new()));
     }
 }

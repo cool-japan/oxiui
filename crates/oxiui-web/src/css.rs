@@ -59,7 +59,6 @@ pub fn inject_canvas_styles() -> Result<(), String> {
 /// # Errors
 ///
 /// Returns `Err` if any DOM operation fails.
-#[allow(unused_variables)]
 pub fn inject_css(css_text: &str, marker_attr: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -102,6 +101,7 @@ pub fn inject_css(css_text: &str, marker_attr: &str) -> Result<(), String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (css_text, marker_attr);
         Ok(())
     }
 }
@@ -114,7 +114,6 @@ pub fn inject_css(css_text: &str, marker_attr: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns `Err` if the canvas is not found or the attribute cannot be set.
-#[allow(unused_variables)]
 pub fn mark_canvas(canvas_id: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -133,6 +132,7 @@ pub fn mark_canvas(canvas_id: &str) -> Result<(), String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = canvas_id;
         Ok(())
     }
 }

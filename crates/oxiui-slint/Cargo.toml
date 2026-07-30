@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiUI slint adapter (NON-PURE: slint pulls yeslogic-fontconfig-sys on Linux; not in the Pure-Rust L1 set; GPL-gated)"
+readme = "README.md"
 categories = ["gui", "rendering"]
 keywords = ["gui", "slint", "cooljapan", "pure-rust", "oxiui"]
 
@@ -18,6 +19,9 @@ keywords = ["gui", "slint", "cooljapan", "pure-rust", "oxiui"]
 # with one of slint's three license options (GPL-3.0, Royalty-free, or Commercial).
 # oxiui itself remains Apache-2.0; slint is only pulled in when explicitly
 # requested via `--features slint`.
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["slint"]  # optional dep for M6 native run_event_loop(); only referenced in doc comments and commented-out code today
 
 [features]
 default = []

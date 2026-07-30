@@ -217,8 +217,20 @@ fn fill_polygon_with_scratch(
             max_y = y;
         }
     }
-    let y_start = min_y.floor() as i32;
-    let y_end = max_y.ceil() as i32;
+    // `as i32` on floats saturates to i32::MIN/MAX (stable Rust cast
+    // semantics), so these stay finite even for +-inf or absurd vertex
+    // coordinates — but the *range* itself can still span billions of rows.
+    let raw_y_start = min_y.floor() as i32;
+    let raw_y_end = max_y.ceil() as i32;
+
+    // Clamp the scanline range to the framebuffer height so a wildly
+    // out-of-range vertex Y cannot force the fill loop below to run
+    // billions of empty iterations. `height_i32` itself is clamped first so
+    // the `clamp` calls can never overflow for a (hypothetical) oversized
+    // framebuffer.
+    let height_i32 = fb.height().min(i32::MAX as u32) as i32;
+    let y_start = raw_y_start.clamp(0, height_i32);
+    let y_end = raw_y_end.clamp(y_start, height_i32);
 
     // Build global edge table into scratch buffer.
     scratch.clear();
@@ -234,6 +246,21 @@ fn fill_polygon_with_scratch(
     });
 
     let mut gi = 0usize;
+
+    // Fast-forward: activate every edge whose (unclamped) `y_start` lies
+    // above the clamped `y_start`, advancing its X to the clamped row
+    // directly via the edge slope. This is O(edge count), not O(rows), so a
+    // polygon whose top is far above the clamped range never costs more
+    // than one pass over its edges, while the visible fill is unaffected.
+    while gi < scratch.global_edges.len() && scratch.global_edges[gi].0 < y_start {
+        let (edge_y_start, edge) = &scratch.global_edges[gi];
+        if edge.y_max > y_start {
+            let mut e = edge.clone();
+            e.x += e.dx * (y_start - edge_y_start) as f32;
+            scratch.active.push(e);
+        }
+        gi += 1;
+    }
 
     for y in y_start..y_end {
         // Add edges whose y_start == y.
@@ -351,14 +378,18 @@ fn paint_span(fb: &mut Framebuffer, left: f32, right: f32, y: u32, color: Color,
     if y >= fb.height() {
         return;
     }
-    let x0 = left.floor() as i32;
-    let x1 = right.ceil() as i32;
+    // Clamp the span to the framebuffer width up front. `left`/`right` are
+    // raw float edge coordinates that can be arbitrarily large (an extreme
+    // edge slope or vertex X), so without this the `x0..x1` loop below could
+    // run billions of no-op iterations before a per-pixel bounds check ever
+    // discarded anything.
+    let width_i32 = fb.width().min(i32::MAX as u32) as i32;
+    let x0 = (left.floor() as i32).clamp(0, width_i32);
+    let x1 = (right.ceil() as i32).clamp(x0, width_i32);
     let Color(cr, cg, cb, ca) = color;
 
     for px in x0..x1 {
-        if px < 0 || px as u32 >= fb.width() {
-            continue;
-        }
+        // `px` is guaranteed to lie in `[0, fb.width())` by the clamp above.
         let coverage = if aa {
             span_coverage(left, right, px as f32)
         } else {
@@ -406,8 +437,23 @@ fn fill_polygon_clipped_with_scratch(
             max_y = y;
         }
     }
-    let y_clip_start = (min_y.floor() as i64).max(clip.y0) as i32;
-    let y_end = (max_y.ceil() as i64).min(clip.y1) as i32;
+    // `as i32` on floats saturates to i32::MIN/MAX, so these stay finite
+    // even for +-inf or absurd vertex coordinates — but the *range* can
+    // still span billions of rows before being intersected with the clip.
+    let raw_y_start = min_y.floor() as i32;
+    let raw_y_end = max_y.ceil() as i32;
+
+    // Clamp the scanline range to both the clip rectangle and the
+    // framebuffer height so neither a wildly out-of-range vertex Y nor an
+    // oversized clip rectangle can force the fill loop below to run
+    // billions of empty iterations. `height_i32` (and the clip bounds
+    // derived from it) are clamped first so none of the arithmetic here can
+    // overflow.
+    let height_i32 = fb.height().min(i32::MAX as u32) as i32;
+    let clip_y0 = clip.y0.clamp(0, height_i32 as i64) as i32;
+    let clip_y1 = clip.y1.clamp(0, height_i32 as i64) as i32;
+    let y_clip_start = raw_y_start.max(clip_y0);
+    let y_end = raw_y_end.min(clip_y1);
 
     scratch.clear();
     build_edges_into(points, &mut scratch.global_edges);
@@ -421,7 +467,21 @@ fn fill_polygon_clipped_with_scratch(
 
     let mut gi = 0usize;
 
-    for y in (min_y.floor() as i32)..y_end {
+    // Fast-forward: activate every edge whose (unclamped) `y_start` lies
+    // above the clamped start row, advancing its X to that row directly via
+    // the edge slope instead of visiting each intermediate row. O(edge
+    // count), not O(rows).
+    while gi < scratch.global_edges.len() && scratch.global_edges[gi].0 < y_clip_start {
+        let (edge_y_start, edge) = &scratch.global_edges[gi];
+        if edge.y_max > y_clip_start {
+            let mut e = edge.clone();
+            e.x += e.dx * (y_clip_start - edge_y_start) as f32;
+            scratch.active.push(e);
+        }
+        gi += 1;
+    }
+
+    for y in y_clip_start..y_end {
         while gi < scratch.global_edges.len() && scratch.global_edges[gi].0 == y {
             scratch.active.push(scratch.global_edges[gi].1.clone());
             gi += 1;
@@ -430,9 +490,7 @@ fn fill_polygon_clipped_with_scratch(
         scratch
             .active
             .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(core::cmp::Ordering::Equal));
-        if y >= y_clip_start {
-            fill_spans_clipped(fb, &scratch.active, y as u32, color, fill_rule, aa, &clip);
-        }
+        fill_spans_clipped(fb, &scratch.active, y as u32, color, fill_rule, aa, &clip);
         for e in &mut scratch.active {
             e.x += e.dx;
         }
@@ -682,5 +740,125 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Security regression: unclamped raster spans (billions-of-iterations DoS)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fill_polygon_far_out_of_bounds_is_clamped_and_fast() {
+        // A quad whose vertices sit ~1e9 units outside a tiny framebuffer.
+        // Before the vertical/horizontal span clamps were added, the scanline
+        // loop iterated the *raw* vertex extent (billions of rows/columns)
+        // instead of the framebuffer's actual size, so this call would take
+        // an unreasonable amount of time (effectively a DoS from one
+        // attacker-controlled coordinate). With the fix, the fill must be
+        // bounded by the framebuffer's own dimensions and complete quickly.
+        let mut fb = fresh(10, 10);
+        let huge = 1.0e9_f32;
+        let pts = [(-huge, -huge), (huge, -huge), (huge, huge), (-huge, huge)];
+        let start = std::time::Instant::now();
+        fill_polygon(
+            &mut fb,
+            &pts,
+            Color(255, 0, 0, 255),
+            FillRule::NonZero,
+            false,
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "fill_polygon took {elapsed:?} for far-out-of-bounds coordinates; \
+             the vertical/horizontal span is not being clamped to the framebuffer"
+        );
+        // The quad fully covers the framebuffer, so every in-bounds pixel
+        // must be painted — clamping must not silently drop the fill.
+        for y in 0..10 {
+            for x in 0..10 {
+                assert_eq!(
+                    fb.get_rgba(x, y),
+                    Some((255, 0, 0, 255)),
+                    "pixel ({x},{y}) should be filled"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fill_polygon_clipped_far_out_of_bounds_is_clamped_and_fast() {
+        // Same DoS scenario as above but through the clip-aware fill path,
+        // which has its own (previously unclamped) vertical loop.
+        let mut fb = fresh(10, 10);
+        let huge = 1.0e9_f32;
+        let pts = [(-huge, -huge), (huge, -huge), (huge, huge), (-huge, huge)];
+        let clip = crate::clip::ClipRect::full(10, 10);
+        let start = std::time::Instant::now();
+        fill_polygon_clipped(
+            &mut fb,
+            &pts,
+            Color(0, 0, 255, 255),
+            FillRule::NonZero,
+            false,
+            clip,
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "fill_polygon_clipped took {elapsed:?} for far-out-of-bounds coordinates"
+        );
+        for y in 0..10 {
+            for x in 0..10 {
+                assert_eq!(fb.get_rgba(x, y), Some((0, 0, 255, 255)));
+            }
+        }
+    }
+
+    #[test]
+    fn paint_span_far_out_of_bounds_x_is_clamped() {
+        // Directly exercises `paint_span`'s horizontal clamp: a span whose
+        // edges are far outside the framebuffer width must not attempt to
+        // iterate that raw (billions-wide) pixel range.
+        let mut fb = fresh(8, 8);
+        let start = std::time::Instant::now();
+        paint_span(&mut fb, -1.0e9, 1.0e9, 3, Color(10, 20, 30, 255), false);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "paint_span took {elapsed:?} for a far-out-of-bounds span"
+        );
+        // Row 3 should be fully painted (span covers the whole width) and
+        // every other row must remain untouched.
+        for x in 0..8 {
+            assert_eq!(fb.get_rgba(x, 3), Some((10, 20, 30, 255)));
+        }
+        assert_eq!(fb.get_rgba(0, 0), Some((0, 0, 0, 255)));
+    }
+
+    #[test]
+    fn fill_polygon_partial_offscreen_top_still_paints_visible_rows() {
+        // Regression for the fast-forward logic added alongside the vertical
+        // clamp: a shape that starts well above the framebuffer but extends
+        // into the visible area must still be filled correctly for the
+        // visible rows (clamping the loop start must not skip edges that
+        // were already active when the visible range begins).
+        let mut fb = fresh(10, 10);
+        let pts = [(2.0f32, -1000.0), (8.0, -1000.0), (8.0, 5.0), (2.0, 5.0)];
+        fill_polygon(
+            &mut fb,
+            &pts,
+            Color(0, 255, 0, 255),
+            FillRule::NonZero,
+            false,
+        );
+        for y in 0..5 {
+            assert_eq!(
+                fb.get_rgba(5, y),
+                Some((0, 255, 0, 255)),
+                "row {y} should be filled by the far-off-screen rectangle"
+            );
+        }
+        // Below the rectangle's bottom edge (y=5) should be untouched.
+        assert_eq!(fb.get_rgba(5, 9), Some((0, 0, 0, 255)));
     }
 }

@@ -66,7 +66,7 @@
 //! | [`wgsl`]    | WGSL preprocessor, validation, and built-in compute kernels |
 //! | [`dispatch`] | [`Dispatcher`] — high-level GPU compute helpers |
 //! | [`integration`] | Bridges to `oxiui-render-soft`, `oxiui-render-wgpu`, `oxiui-text` |
-//! | _hot-reload_ | Moved to the separate [`oxiui-hot-reload-notify`] quarantine crate (kept out of the Pure-Rust pure-set) |
+//! | _hot-reload_ | Moved to the separate `oxiui-hot-reload-notify` quarantine crate (kept out of the Pure-Rust pure-set) |
 //!
 //! ## Dependency re-exports
 //!

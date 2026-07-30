@@ -136,7 +136,6 @@ impl Default for FrameTimer {
 /// # Errors
 ///
 /// Returns `Err` if the DOM API call fails.
-#[allow(unused_variables)]
 pub fn request_animation_frame<F>(callback: F) -> Result<(), String>
 where
     F: FnOnce(f64) + 'static,
@@ -177,7 +176,6 @@ where
 /// # Errors
 ///
 /// Returns `Err` if the initial `requestAnimationFrame` call fails.
-#[allow(unused_variables)]
 pub fn start_animation_loop<F>(callback: F) -> Result<(), String>
 where
     F: Fn(f64) -> bool + 'static,
@@ -308,7 +306,6 @@ pub enum VisibilityState {
 /// # Errors
 ///
 /// Returns `Err` if the DOM `addEventListener` call fails.
-#[allow(unused_variables)]
 pub fn bind_visibility_change<F>(callback: F) -> Result<(), String>
 where
     F: Fn(VisibilityState) + 'static,
@@ -348,6 +345,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = callback;
         Ok(())
     }
 }
@@ -371,7 +369,6 @@ where
 ///
 /// Returns `Err` if the initial `requestAnimationFrame` or
 /// `visibilitychange` binding fails.
-#[allow(unused_variables)]
 pub fn start_dirty_animation_loop<F>(dirty: DirtyFlag, callback: F) -> Result<(), String>
 where
     F: Fn(f64, bool) -> bool + 'static,
@@ -450,6 +447,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = dirty;
         // On native: call once synchronously with is_dirty = true.
         callback(0.0, true);
         Ok(())

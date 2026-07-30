@@ -22,14 +22,14 @@
 //! #     fn column_defs(&self) -> &[ColumnDef] { &[] }
 //! # }
 //! use oxiui_table::accessibility::{build_table_a11y_tree, TableA11yParams};
-//! use oxiui_table::selection::SelectionModel;
+//! use oxiui_table::{SelectionMode, SelectionModel};
 //!
 //! let source = S;
-//! let selection = SelectionModel::default();
+//! let selection = SelectionModel::new(SelectionMode::None);
 //! let params = TableA11yParams {
 //!     row_count: source.row_count(),
 //!     col_headers: &[],
-//!     selected_rows: selection.selected_rows(),
+//!     selected_rows: &selection.selected_sorted(),
 //!     first_node_id: 1,
 //! };
 //! let root = build_table_a11y_tree(&params);

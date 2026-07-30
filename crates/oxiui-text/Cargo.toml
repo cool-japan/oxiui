@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiText/OxiFont bridge for OxiUI text rendering"
+readme = "README.md"
 categories = ["text-processing", "gui"]
 keywords = ["text", "oxiui", "oxitext", "cooljapan", "pure-rust"]
 

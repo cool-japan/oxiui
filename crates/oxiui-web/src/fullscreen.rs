@@ -21,7 +21,6 @@
 /// # Errors
 ///
 /// Returns `Err` if the canvas element is not found in the DOM.
-#[allow(unused_variables)]
 pub fn request_fullscreen(canvas_id: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -48,6 +47,7 @@ pub fn request_fullscreen(canvas_id: &str) -> Result<(), String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = canvas_id;
         Ok(())
     }
 }
@@ -134,7 +134,6 @@ pub fn toggle_fullscreen(canvas_id: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns `Err` if the DOM binding fails.
-#[allow(unused_variables)]
 pub fn on_fullscreen_change<F>(callback: F) -> Result<(), String>
 where
     F: Fn(bool) + 'static,
@@ -168,6 +167,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = callback;
         Ok(())
     }
 }

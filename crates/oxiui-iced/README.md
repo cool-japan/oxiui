@@ -11,7 +11,7 @@ iced is a **Pure Rust** GUI framework, so this adapter keeps the OxiUI stack C/C
 
 ```toml
 [dependencies]
-oxiui-iced = "0.1.3"
+oxiui-iced = "0.2.1"
 ```
 
 ## Quick Start
@@ -131,9 +131,27 @@ Implements [`oxiui_core::UiCtx`] widgets including `heading`, `label`, `button`,
 |----------|-------------|
 | `forward_ime_event(&UiEvent)` | Best-effort IME forwarding stub (see note below) |
 
+### `a11y_bridge` module (`a11y` feature)
+
+Bridges a collected `WidgetSpec` tree into an `accesskit::TreeUpdate`. iced 0.14 has
+no built-in AccessKit support, so this is a best-effort semantic bridge operating on
+the spec tree (before iced rendering) rather than through iced internals; each spec
+variant maps to the closest `oxiui_accessibility::tree::WidgetRole`. Decorative specs
+(`Separator`, `Spacer`) are omitted.
+
+| Item | Description |
+|------|-------------|
+| `IcedA11yConfig` | Configuration: `root_label: Option<String>`, `id_start: u64` (default `1`). |
+| `spec_to_a11y_node(WidgetSpec, &mut u64) -> Option<A11yNode>` | Convert a single spec to an `A11yNode` (depth-first `NodeId` counter). |
+| `spec_to_a11y_tree(&[WidgetSpec], &IcedA11yConfig) -> TreeUpdate` | Convert a full spec tree under a synthesised root `Window` node. |
+
 ## Feature Flags
 
-This crate exposes no Cargo features; `default` is empty. The `iced` dependency is built with its `image` and `advanced` features.
+`default` is empty; the `a11y` feature below is opt-in. The `iced` dependency itself is always built with its `image` and `advanced` features.
+
+| Feature | Pulls in | Description |
+|---------|----------|-------------|
+| `a11y` | `oxiui-accessibility`, `accesskit` | Enables the `a11y_bridge` module (see above). |
 
 ## Errors
 

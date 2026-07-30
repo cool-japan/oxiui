@@ -11,7 +11,7 @@ Built entirely on `oxitext` + `oxifont` — no C/C++ shaping libraries (no HarfB
 
 ```toml
 [dependencies]
-oxiui-text = "0.1.3"
+oxiui-text = "0.2.1"
 ```
 
 ## Quick Start
@@ -135,6 +135,24 @@ assert_eq!(area.line_count(), 2);
 ### `hyperlink` module
 
 `find_hyperlinks(text) -> Vec<HyperlinkSpan>` — auto-detects URLs in plain text.
+
+### `emoji` module — emoji rendering *(requires the `emoji` feature)*
+
+| Item | Description |
+|------|-------------|
+| `is_emoji_codepoint(char) -> bool` | Unicode emoji/pictographic-block detection |
+| `EmojiSegmenter` | Iterator splitting text into alternating [`EmojiRun`]s by `RunKind` (`Plain`/`Emoji`) |
+| `EmojiRun` | A contiguous same-kind run: `text`, `kind`, `byte_start` |
+| `EmojiRenderer` | Wraps a `TextPipeline`; `new`, `from_bytes`, `render_with_emoji(text, style, target_px) -> Result<Vec<EmojiGlyph>, UiError>` |
+| `EmojiGlyph` | A rendered emoji bitmap: `rgba`, `width`, `height`, `advance_x`, `bearing_y` |
+
+Colour-glyph (CBDT/COLR) pixel extraction is not yet exposed by upstream `oxifont`, so emoji currently rasterize via the greyscale path (white + coverage alpha) rather than true colour.
+
+## Feature Flags
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `emoji` | off | Emoji rendering: detect emoji codepoints, route them to `oxifont` color-glyph extraction (CBDT/COLR), and scale them to match the current text size |
 
 ## Error variants — `TextError`
 

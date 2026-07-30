@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiUI system-tray adapter (quarantine crate — pulls GTK on Linux; NOT in the Pure-Rust L1 set)"
+readme = "README.md"
 categories = ["gui"]
 keywords = ["gui", "tray", "cooljapan", "oxiui"]
 

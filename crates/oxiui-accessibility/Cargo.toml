@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiUI accessibility bridge — builds an accesskit a11y node tree from the OxiUI widget graph"
+readme = "README.md"
 categories = ["accessibility", "gui"]
 keywords = ["accessibility", "a11y", "accesskit", "cooljapan", "pure-rust"]
 

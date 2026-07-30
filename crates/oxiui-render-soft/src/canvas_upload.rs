@@ -114,8 +114,9 @@ pub fn upload_rgba(data: &[u8], width: u32, height: u32, canvas_id: &str) -> Res
 ///
 /// On `wasm32` + `canvas-2d` the real implementation is active.
 #[cfg(not(all(feature = "canvas-2d", target_arch = "wasm32")))]
-#[allow(unused_variables)]
 pub fn upload_framebuffer(fb: &Framebuffer, canvas_id: &str) -> Result<(), String> {
+    // No canvas on native targets; discard the arguments explicitly.
+    let _ = (fb, canvas_id);
     Ok(())
 }
 
@@ -123,8 +124,9 @@ pub fn upload_framebuffer(fb: &Framebuffer, canvas_id: &str) -> Result<(), Strin
 ///
 /// On `wasm32` + `canvas-2d` the real implementation is active.
 #[cfg(not(all(feature = "canvas-2d", target_arch = "wasm32")))]
-#[allow(unused_variables)]
 pub fn upload_rgba(data: &[u8], width: u32, height: u32, canvas_id: &str) -> Result<(), String> {
+    // No canvas on native targets; discard the arguments explicitly.
+    let _ = (data, width, height, canvas_id);
     Ok(())
 }
 

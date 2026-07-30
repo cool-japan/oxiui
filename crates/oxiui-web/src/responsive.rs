@@ -199,7 +199,6 @@ pub fn detect_reduced_motion() -> ReducedMotion {
 /// # Errors
 ///
 /// Returns `Err` if any media-query API call fails.
-#[allow(unused_variables)]
 pub fn on_breakpoint_change<F>(callback: F) -> Result<(), String>
 where
     F: Fn(Breakpoint) + 'static,
@@ -248,6 +247,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = callback;
         Ok(())
     }
 }
@@ -255,7 +255,6 @@ where
 /// Listen for `orientationchange` events and invoke the callback.
 ///
 /// On non-wasm targets this is always `Ok(())`.
-#[allow(unused_variables)]
 pub fn on_orientation_change<F>(callback: F) -> Result<(), String>
 where
     F: Fn() + 'static,
@@ -278,6 +277,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = callback;
         Ok(())
     }
 }

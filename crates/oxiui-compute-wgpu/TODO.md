@@ -2,9 +2,10 @@
 
 Roadmap for the Pure-Rust wgpu GPU-compute abstraction.
 
-## Status (2026-06-02)
+## Status
 
-Round 1 implementation is complete. Shipped in this round:
+Round 1 (2026-06-02) and the subsequent `Dispatcher`/integration round are both
+complete. Shipped:
 
 - `require_gpu!` macro (lives in `oxiui-core`; shared CI-skip macro for every crate).
 - `ContextBuilder` with `with_limits` / `with_features` / `with_power_preference`,
@@ -21,15 +22,21 @@ Round 1 implementation is complete. Shipped in this round:
 - `wgsl::preprocess` (`#include` stitching with cycle detection and a depth cap)
   and `wgsl::validate` returning structured `WgslDiagnostic` values.
 - Built-in WGSL kernels: `SHADER_PREFIX_SUM`, `SHADER_REDUCTION_SUM`,
-  `SHADER_HISTOGRAM`, `SHADER_MATMUL`.
+  `SHADER_HISTOGRAM`, `SHADER_MATMUL`, `SHADER_SPH_DENSITY`,
+  `SHADER_BITONIC_SORT`, `SHADER_MAP_F32_TEMPLATE`, `SHADER_ZIP_MAP_F32_TEMPLATE`.
+- `dispatch::Dispatcher` — one-call `map_f32` / `zip_map_f32` / `reduce_sum_f32`
+  / `sph_density` / `sort_f32` wrapping the kernels above.
+- `integration` module: `render_soft` (GPU blur/dither/gradient-fill bridges),
+  `render_wgpu` (`SharedDevice`/`SharedComputeContext` device sharing), `text`
+  (`GlyphRasterizer` GPU glyph rasterization).
 - `ComputeError` extended with `OutOfMemory`, `ShaderCompilation`, and
   `Operation { op, detail }`.
 - Runnable `lib.rs` doc-test (executes the full dispatch, GPU-optional).
 - `examples/prefix_sum.rs` and `examples/matrix_mul.rs`.
-- 65 tests + 18 doc-tests, 0 warnings.
+- 96 tests + 25 doc-tests, 0 warnings (`cargo nextest run -p oxiui-compute-wgpu --all-features` + `cargo test --doc`).
 
-The sections below keep the completed (`[x]`) items as a record and list the
-remaining (`[ ]`) backlog with its planning notes.
+The sections below keep the completed (`[x]`) items as a record. There is no
+outstanding (`[ ]`) backlog at present.
 
 ## Core Implementation
 
@@ -62,8 +69,8 @@ remaining (`[ ]`) backlog with its planning notes.
 ## WGSL Utilities
 
 - [x] WGSL preprocessor — `preprocess(source, resolver)` with `#include "path"`-style file stitching, cycle detection, and a depth cap so shaders can be assembled from modular fragments before compilation.
-- [x] Shader hot-reload — watch WGSL source files (via `notify`) and recompile the affected pipelines without restarting the process; expose a `reload()` hook for editor integration.
-- [x] Built-in shader library — ship validated WGSL kernels for prefix sum (scan), reduction (sum), histogram, and tiled matrix multiply: `SHADER_PREFIX_SUM`, `SHADER_REDUCTION_SUM`, `SHADER_HISTOGRAM`, `SHADER_MATMUL`.
+- [x] Shader hot-reload — watch WGSL source files (via `notify`) and recompile the affected pipelines without restarting the process; expose a `reload()` hook for editor integration. **Relocated:** this landed in the separate `oxiui-hot-reload-notify` crate (its `ShaderWatcher`), not here — `notify` pulls in `inotify-sys` / `fsevent-sys` on some platforms, which would break this crate's Pure-Rust default build. `oxiui-compute-wgpu` itself contains no hot-reload code.
+- [x] Built-in shader library — ship validated WGSL kernels for prefix sum (scan), reduction (sum), histogram, tiled matrix multiply, SPH density, bitonic sort, and element-wise map/zip-map templates: `SHADER_PREFIX_SUM`, `SHADER_REDUCTION_SUM`, `SHADER_HISTOGRAM`, `SHADER_MATMUL`, `SHADER_SPH_DENSITY`, `SHADER_BITONIC_SORT`, `SHADER_MAP_F32_TEMPLATE`, `SHADER_ZIP_MAP_F32_TEMPLATE`. The `dispatch::Dispatcher` wraps all eight behind one-call ergonomic methods.
 - [x] WGSL validation errors — `validate(device, source)` captures `wgpu::CompilationInfo` from `get_compilation_info()` and surfaces `WgslDiagnostic` values with line and column numbers instead of panicking inside `create_compute_pipeline`.
 
 ## Integration

@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure-Rust wgpu GPU-compute abstraction for the COOLJAPAN ecosystem"
+readme = "README.md"
 keywords = ["wgpu", "gpu", "compute", "cooljapan", "pure-rust"]
 categories = ["rendering::engine", "science"]
 publish = true
@@ -27,7 +28,7 @@ tracing  = { workspace = true, optional = true }
 
 [dev-dependencies]
 oxiui-core = { path = "../oxiui-core" }
-criterion  = { version = "0.8", features = ["html_reports"] }
+criterion.workspace = true
 
 [[bench]]
 name = "readback"

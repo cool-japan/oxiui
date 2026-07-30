@@ -311,13 +311,30 @@ pub fn composite_into(
     dst_y: i64,
     mode: BlendMode,
 ) -> usize {
-    if w == 0 || h == 0 || src.len() < (w * h * 4) as usize {
+    if w == 0 || h == 0 {
+        return 0;
+    }
+    // Compute the required source length in `usize` with checked
+    // arithmetic. Doing this as `w * h * 4` in `u32` can wrap for large
+    // `w`/`h`, producing a too-small guard value that would defeat the
+    // `src.len()` bounds check and let the loop below index past the end of
+    // `src`. An overflow here means the caller-supplied dimensions can never
+    // be satisfied by any real `src` slice, so treat it as "no data".
+    let required_len = (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|n| n.checked_mul(4));
+    let Some(required_len) = required_len else {
+        return 0;
+    };
+    if src.len() < required_len {
         return 0;
     }
     let mut written = 0;
     for j in 0..h {
         for i in 0..w {
-            let si = ((j * w + i) * 4) as usize;
+            // `usize` math mirrors the checked guard above, so this index
+            // can never overflow now that `w * h * 4 <= src.len()` is known.
+            let si = (j as usize * w as usize + i as usize) * 4;
             let r = src[si];
             let g = src[si + 1];
             let b = src[si + 2];
@@ -567,5 +584,44 @@ mod tests {
         let src_bytes = [255u8, 0, 0, 128];
         let written = composite_into(&mut fb, &src_bytes, 1, 1, 0, 0, BlendMode::Normal);
         assert!(written <= 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Security regression: `composite_into` size math overflow
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn composite_into_near_u32_boundary_does_not_overflow_or_panic() {
+        // `w * h` alone (70_000 * 70_000 ≈ 4.9e9) already exceeds
+        // `u32::MAX` (≈4.29e9), so computing the required length as
+        // `w * h * 4` in `u32` either panics (debug overflow checks) or
+        // wraps to a small value that would defeat the `src.len()` bounds
+        // check and let the pixel loop index past the end of `src`. The
+        // fixed implementation must recognise the size is unsatisfiable and
+        // return 0 without panicking or reading/writing out of bounds.
+        let mut fb = Framebuffer::with_fill(4, 4, Color(0, 0, 0, 255));
+        let src = vec![0u8; 16]; // far too small for any real w*h*4
+        let written = composite_into(&mut fb, &src, 70_000, 70_000, 0, 0, BlendMode::Normal);
+        assert_eq!(written, 0, "oversized w*h*4 must be rejected, not wrapped");
+
+        // Framebuffer must be untouched.
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(fb.get_rgba(x, y), Some((0, 0, 0, 255)));
+            }
+        }
+    }
+
+    #[test]
+    fn composite_into_exact_u32_boundary_dims_no_panic() {
+        // `w * h * 4` computed as a pure `u32` product wraps to exactly 0 for
+        // these dimensions (`65536 * 65536 * 4 == 2^32 == 0 mod 2^32`), which
+        // would make the old `src.len() < 0` guard always false — i.e. it
+        // would accept *any* `src`, however small, and then index far past
+        // its end. Confirm the fixed guard rejects this instead.
+        let mut fb = Framebuffer::with_fill(2, 2, Color(0, 0, 0, 255));
+        let src = vec![0u8; 4];
+        let written = composite_into(&mut fb, &src, 65_536, 65_536, 0, 0, BlendMode::Normal);
+        assert_eq!(written, 0);
     }
 }

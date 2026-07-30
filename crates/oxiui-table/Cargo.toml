@@ -7,8 +7,12 @@ authors.workspace    = true
 license.workspace    = true
 repository.workspace = true
 description = "Virtualized table widget with egui and iced backends for OxiUI"
+readme      = "README.md"
 keywords    = ["gui", "table", "egui", "iced", "cooljapan"]
 categories  = ["gui"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["eframe"]  # optional dep declared under the egui-table feature for downstream eframe::App integration; only referenced in a doc comment today
 
 [features]
 default    = []

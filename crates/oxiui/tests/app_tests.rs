@@ -416,7 +416,7 @@ fn with_font_multiple_families_accumulate() {
 fn backend_runner_egui_constructs() {
     #[cfg(feature = "egui")]
     {
-        let _runner = oxiui::EguiRunner;
+        let _runner = oxiui::EguiRunner::new();
     }
 }
 
@@ -424,16 +424,70 @@ fn backend_runner_egui_constructs() {
 fn backend_runner_iced_constructs() {
     #[cfg(feature = "iced")]
     {
-        let _runner = oxiui::IcedRunner;
+        let _runner = oxiui::IcedRunner::new();
     }
 }
 
 #[test]
 fn lifecycle_config_default_constructs() {
     let lc = oxiui::runner::LifecycleConfig::default();
-    assert!(lc.on_close.is_none());
-    assert!(lc.on_resize.is_none());
-    assert!(lc.on_focus.is_none());
+    assert!(lc.on_close.is_empty());
+    assert!(lc.on_resize.is_empty());
+    assert!(lc.on_focus.is_empty());
+}
+
+// ─── U2: LifecycleTracker deduplication ───────────────────────────────────────
+
+#[test]
+fn lifecycle_tracker_dedups_size_and_focus_and_close() {
+    use oxiui::runner::{LifecycleEvent, LifecycleSnapshot, LifecycleTracker};
+
+    let mut t = LifecycleTracker::default();
+
+    // First size observation emits a (seeding) Resized event.
+    let e = t.observe(LifecycleSnapshot {
+        size: Some((800.0, 600.0)),
+        focused: Some(true),
+        close_requested: false,
+    });
+    assert!(e.contains(&LifecycleEvent::Resized(800.0, 600.0)));
+    assert!(e.contains(&LifecycleEvent::Focus(true)));
+
+    // Same size + focus again: no events (deduplicated).
+    let e = t.observe(LifecycleSnapshot {
+        size: Some((800.0, 600.0)),
+        focused: Some(true),
+        close_requested: false,
+    });
+    assert!(e.is_empty(), "unchanged snapshot must emit nothing: {e:?}");
+
+    // Change size only.
+    let e = t.observe(LifecycleSnapshot {
+        size: Some((1024.0, 768.0)),
+        focused: Some(true),
+        close_requested: false,
+    });
+    assert_eq!(e, vec![LifecycleEvent::Resized(1024.0, 768.0)]);
+
+    // Flip focus only.
+    let e = t.observe(LifecycleSnapshot {
+        size: Some((1024.0, 768.0)),
+        focused: Some(false),
+        close_requested: false,
+    });
+    assert_eq!(e, vec![LifecycleEvent::Focus(false)]);
+
+    // Close fires exactly once, even if requested repeatedly.
+    let e = t.observe(LifecycleSnapshot {
+        close_requested: true,
+        ..LifecycleSnapshot::default()
+    });
+    assert_eq!(e, vec![LifecycleEvent::Close]);
+    let e = t.observe(LifecycleSnapshot {
+        close_requested: true,
+        ..LifecycleSnapshot::default()
+    });
+    assert!(e.is_empty(), "close must fire at most once: {e:?}");
 }
 
 // ─── Slice G: text module re-export ──────────────────────────────────────────
@@ -891,6 +945,57 @@ fn with_persistent_state_headless_no_panic() {
     app.run_headless_once().unwrap();
 
     // Clean up.
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// with_persistent_state must actually save state on close (U2d).
+///
+/// `run_headless_once` fires `on_close` after its single frame, so the state
+/// is encoded to disk. A second run must decode the persisted value, proving
+/// the save path is real (not the old `let _ = path` no-op).
+#[cfg(feature = "persist")]
+#[test]
+fn with_persistent_state_saves_and_reloads_on_close() {
+    use oxicode::{Decode, Encode};
+
+    #[derive(Encode, Decode, Default)]
+    struct Counter {
+        n: u32,
+    }
+
+    let tmp = std::env::temp_dir().join("oxiui_persist_roundtrip_state.oxi");
+    let _ = std::fs::remove_file(&tmp);
+
+    // First session: increment once, then close (persist).
+    oxiui::App::new(AppConfig::default())
+        .with_persistent_state(Counter::default(), tmp.clone(), |_ui, state| {
+            state.n += 1;
+        })
+        .run_headless_once()
+        .unwrap();
+
+    // The file must now exist and decode to n == 1.
+    let bytes = std::fs::read(&tmp).expect("persist file written on close");
+    let restored: Counter = oxicode::decode_value(&bytes).expect("decode persisted state");
+    assert_eq!(restored.n, 1, "state should have been persisted as 1");
+
+    // Second session: loads n == 1, increments to 2, persists again.
+    let observed = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+    let observed_c = std::sync::Arc::clone(&observed);
+    oxiui::App::new(AppConfig::default())
+        .with_persistent_state(Counter::default(), tmp.clone(), move |_ui, state| {
+            state.n += 1;
+            *observed_c.lock().unwrap() = state.n;
+        })
+        .run_headless_once()
+        .unwrap();
+
+    assert_eq!(
+        *observed.lock().unwrap(),
+        2,
+        "second session must load persisted state and increment to 2"
+    );
+
     let _ = std::fs::remove_file(&tmp);
 }
 

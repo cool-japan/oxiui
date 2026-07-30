@@ -97,12 +97,17 @@ pub fn gaussian_blur_alpha_fft(alpha: &mut [f32], width: usize, height: usize, k
     }
 }
 
-/// Stub when `fft-blur` feature is disabled — callers should not reach this
-/// when they check [`should_use_fft_blur`] correctly.
+/// Direct-convolution fallback when the `fft-blur` feature is disabled.
+///
+/// This keeps the *effect* intact even without OxiFFT: it forwards to the
+/// separable direct-convolution blur in [`crate::shadow::gaussian_blur_alpha`].
+/// The result is numerically equivalent to the FFT path (the FFT path is merely
+/// asymptotically faster for large kernels), so callers get a real blur whether
+/// or not the feature is compiled in — the feature only changes *how fast* the
+/// blur runs, never *whether* it happens.
 #[cfg(not(feature = "fft-blur"))]
-#[allow(unused_variables)]
 pub fn gaussian_blur_alpha_fft(alpha: &mut [f32], width: usize, height: usize, kernel: &[f32]) {
-    // No-op: fall back to the direct path in `shadow.rs`.
+    crate::shadow::gaussian_blur_alpha(alpha, width, height, kernel);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +221,33 @@ mod tests {
                 "pixel {i}: direct={d:.4} fft={f:.4} differ by more than 2%"
             );
         }
+    }
+
+    /// When the `fft-blur` feature is OFF, `gaussian_blur_alpha_fft` must still
+    /// blur (via the direct fallback) rather than silently no-op.
+    #[cfg(not(feature = "fft-blur"))]
+    #[test]
+    fn fft_blur_fallback_blurs_when_feature_off() {
+        use crate::shadow::gaussian_kernel;
+        let w = 15;
+        let h = 15;
+        let mut alpha = vec![0.0f32; w * h];
+        alpha[7 * w + 7] = 1.0; // centre pixel
+        gaussian_blur_alpha_fft(&mut alpha, w, h, &gaussian_kernel(4.0));
+        // Energy must have spread to neighbours — a no-op would leave them at 0.
+        assert!(
+            alpha[7 * w + 8] > 0.0,
+            "fallback must blur: right neighbour should be non-zero"
+        );
+        assert!(
+            alpha[6 * w + 7] > 0.0,
+            "fallback must blur: top neighbour should be non-zero"
+        );
+        // The original bright pixel must have been attenuated by the blur.
+        assert!(
+            alpha[7 * w + 7] < 1.0,
+            "fallback must blur: centre should be attenuated"
+        );
     }
 
     #[cfg(feature = "fft-blur")]

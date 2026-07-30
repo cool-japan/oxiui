@@ -4,11 +4,13 @@
 //! drives the user's content closure, lifecycle hooks, and plugins through
 //! egui's immediate-mode frame loop.
 
+use crate::null_ctx::NullUiCtx;
+use crate::runner::{LifecycleEvent, LifecycleSnapshot, LifecycleTracker};
 use crate::{ContentFn, EguiFrameHook, HookFn, Plugin};
 
 /// The eframe application struct that drives the OxiUI content closure.
 ///
-/// Constructed inside `App::run_egui_or_fallback` and passed to
+/// Constructed inside `EguiRunner::run_native` and passed to
 /// `eframe::run_native`.  Not part of the public API.
 pub struct OxiEguiApp {
     pub content: Option<ContentFn>,
@@ -20,6 +22,46 @@ pub struct OxiEguiApp {
     pub frame_skip: bool,
     /// Raw egui::Context escape-hatch callbacks.
     pub egui_frame_hooks: Vec<EguiFrameHook>,
+    /// Hooks fired once when the window is closing (`eframe::App::on_exit`).
+    pub on_close: Vec<HookFn>,
+    /// Hooks fired when the viewport size changes.
+    pub on_resize: Vec<HookFn>,
+    /// Hooks fired when the window focus state flips.
+    pub on_focus: Vec<HookFn>,
+    /// Deduplicates raw size / focus / close snapshots into fired events.
+    pub tracker: LifecycleTracker,
+}
+
+impl OxiEguiApp {
+    /// Fire the hooks corresponding to a batch of deduplicated lifecycle events.
+    ///
+    /// Hooks run against a [`NullUiCtx`]: lifecycle events fire outside a live
+    /// drawing frame, so there is no `EguiUiCtx` to bind them to.
+    fn dispatch_lifecycle(&mut self, events: &[LifecycleEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        let mut null = NullUiCtx;
+        for ev in events {
+            match ev {
+                LifecycleEvent::Resized(_, _) => {
+                    for hook in self.on_resize.iter_mut() {
+                        hook(&mut null);
+                    }
+                }
+                LifecycleEvent::Focus(_) => {
+                    for hook in self.on_focus.iter_mut() {
+                        hook(&mut null);
+                    }
+                }
+                LifecycleEvent::Close => {
+                    for hook in self.on_close.iter_mut() {
+                        hook(&mut null);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for OxiEguiApp {
@@ -60,9 +102,37 @@ impl eframe::App for OxiEguiApp {
             hook(&egui_ctx);
         }
 
+        // Drop the UiCtx borrow before polling window lifecycle state.
+        drop(ctx_bridge);
+
+        // Poll viewport size + focus and fire resize / focus hooks on change.
+        let (size, focused) = egui_ctx.input(|i| {
+            let rect = i.viewport_rect();
+            ((rect.width(), rect.height()), i.focused)
+        });
+        let events = self.tracker.observe(LifecycleSnapshot {
+            size: Some(size),
+            focused: Some(focused),
+            close_requested: false,
+        });
+        self.dispatch_lifecycle(&events);
+
         // Frame-skip: if no input events occurred this frame, defer the next repaint.
         if self.frame_skip && egui_ctx.input(|i| i.events.is_empty()) {
             egui_ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
+    }
+
+    /// Called once on shutdown (non-glow eframe signature).
+    ///
+    /// Fires the `on_close` hooks exactly once via the shared
+    /// [`LifecycleTracker`] close guard.
+    fn on_exit(&mut self) {
+        let events = self.tracker.observe(LifecycleSnapshot {
+            size: None,
+            focused: None,
+            close_requested: true,
+        });
+        self.dispatch_lifecycle(&events);
     }
 }

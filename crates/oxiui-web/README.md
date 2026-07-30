@@ -193,7 +193,6 @@ On wasm32, `mount(canvas_id)`:
 | [`oxiui`](../oxiui) | Facade crate. It does **not** depend on (or feature-gate) this template; on wasm32 `App::run` returns `Err(Unsupported)` pointing you at `oxiui_web::mount`. |
 | [`oxiui-core`](../oxiui-core) | Defines `Key`, `UiEvent` (deserialised by `inject_event`), and `serde` support. |
 | [`oxiui-egui`](../oxiui-egui) | egui adapter; provides `forward_event_to_egui` used to inject events into the live context. |
-| [`oxiui-render-wgpu`](../oxiui-render-wgpu) | wgpu render backend powering the browser canvas via WebGL/WebGPU. |
 
 ## License
 

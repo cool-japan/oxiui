@@ -24,6 +24,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "OxiUI WGSL hot-reload file watcher (quarantine crate — pulls inotify-sys/fsevent-sys via notify; NOT in the Pure-Rust L1 set)"
+readme = "README.md"
 keywords = ["wgsl", "hot-reload", "notify", "cooljapan", "oxiui"]
 categories = ["filesystem", "rendering"]
 publish = true

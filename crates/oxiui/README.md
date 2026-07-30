@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/oxiui.svg)](https://crates.io/crates/oxiui)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`oxiui` is the top-level façade crate for OxiUI — the COOLJAPAN Pure-Rust UI layer with **no GTK (C), no Qt (C++), no SDL (C), no system widgets, and no raw AppKit / Win32 / Cocoa bindings**. It wraps the immediate-mode widget API from `oxiui-core`, selects a render + framework backend through Cargo features, and re-exports everything an application needs behind one builder: [`App`]. By default it boots an egui application rendered via wgpu; alternative backends (iced, Slint, Dioxus, software) are opt-in. The wasm32 / browser entry point is the separate unpublished [`oxiui-web`](../oxiui-web) copy-template, not a facade feature.
+`oxiui` is the top-level façade crate for OxiUI — the COOLJAPAN Pure-Rust UI layer with **no GTK (C), no Qt (C++), no SDL (C), no system widgets, and no raw AppKit / Win32 / Cocoa bindings**. It wraps the immediate-mode widget API from `oxiui-core`, selects a render + framework backend through Cargo features, and re-exports everything an application needs behind one builder: [`App`]. By default it boots an egui application rendered via wgpu; alternative backends (iced, Dioxus, software) are opt-in. The wasm32 / browser entry point is the separate unpublished [`oxiui-web`](../oxiui-web) copy-template, not a facade feature. (A Slint adapter exists as the standalone [`oxiui-slint`](../oxiui-slint) crate — it is a KNOWN-NON-PURE, direct-opt-in dependency, not a facade feature; see [0.2.0 removal notice](../../CHANGELOG.md).)
 
 The facade is the only crate most applications depend on. It owns the application life-cycle: window configuration ([`AppConfig`]), the event loop ([`App::run`]), headless rendering for CI ([`App::run_headless_once`], [`App::screenshot`]), and cross-cutting features — plugins ([`Plugin`]), global hotkeys ([`HotkeyRegistry`]), a fuzzy-searchable command palette ([`CommandPalette`]), and a toast [`NotificationQueue`]. GPU drivers (Vulkan/Metal/DX12/WebGPU) are OS-provided at runtime and do not appear in `cargo tree --edges normal`, keeping the build Pure Rust.
 
@@ -14,16 +14,16 @@ The facade is the only crate most applications depend on. It owns the applicatio
 ```toml
 [dependencies]
 # Default: egui + wgpu native app
-oxiui = "0.1.3"
+oxiui = "0.2.1"
 
 # Headless / ffi-audit: CPU softbuffer framebuffer, no GPU stack at build time
-oxiui = { version = "0.1.3", default-features = false, features = ["software"] }
+oxiui = { version = "0.2.1", default-features = false, features = ["software"] }
 
 # iced retained-mode backend
-oxiui = { version = "0.1.3", features = ["iced"] }
+oxiui = { version = "0.2.1", features = ["iced"] }
 
 # Everything: tables, accessibility, plus the iced backend
-oxiui = { version = "0.1.3", features = ["iced", "table", "a11y"] }
+oxiui = { version = "0.2.1", features = ["iced", "table", "a11y"] }
 ```
 
 ## Quick Start
@@ -77,10 +77,14 @@ The active backend is chosen with [`App::backend`] and the [`Backend`] enum. The
 
 | `Backend` variant | Feature | Framework / mode | Status |
 |-------------------|---------|------------------|--------|
-| `Egui` (default) | `egui` | egui + eframe, immediate-mode, rendered via wgpu | Live native window. |
-| `Iced` | `iced` | iced, retained-mode (Elm-style update/view) | Live native window. Button clicks carry one-frame latency (inherent to the retained↔immediate bridge). |
-| `Slint` | `slint` | Slint toolkit (Pure-Rust CPU renderer) | M5: headless collection mode. Native window (`run_event_loop`) deferred to M6. **GPL-3.0 OR royalty-free OR commercial** — see `oxiui-slint`. |
+| `Egui` (default) | `egui` | egui + eframe, immediate-mode, rendered via wgpu | Live native window; drives the real `eframe::run_native` event loop via `EguiRunner`. |
+| `Iced` | `iced` | iced, retained-mode (Elm-style update/view) | Live native window; drives the real `iced::application` event loop via `IcedRunner`, honouring `AppConfig`'s configured window size and waiting for `on_close` hooks to run before the window actually closes. Button clicks carry one-frame latency (inherent to the retained↔immediate bridge). |
 | `Dioxus` | `dioxus` | Dioxus reactive framework (`minimal` Pure-Rust feature set) | M5: headless collection mode. Native rendering via `dioxus-native` deferred to M6. |
+
+There is no `Backend::Slint` variant — the `slint` feature was removed from the facade
+in 0.2.0 because `oxiui-slint` is a KNOWN-NON-PURE adapter (pulls in a C fontconfig
+binding on Linux via `slint` → `parley`/`fontique`). Use the standalone
+[`oxiui-slint`](../oxiui-slint) crate directly instead.
 
 The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError::Unsupported` on wasm32); instead use [`oxiui_web::mount`](#web-wasm32-entry-point) from the unpublished `oxiui-web` copy-template in a browser binary.
 
@@ -109,15 +113,22 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | `.with_frame_skip(bool)` | egui: defer repaint by 1 s when no input events occurred (CPU-saving dirty flag). |
 | `.with_egui_ctx(F)` | egui escape hatch — per-frame callback receiving the raw `egui::Context` (requires `egui`). |
 | `.table(source)` | Render an `oxiui_table::RowSource` as the app content (requires `table`). |
+| `.with_persistent_state(initial, path, F)` | Stateful content closure (`FnMut(&mut dyn UiCtx, &mut State)`) whose state is decoded from `path` via `oxicode` at startup and re-encoded to `path` from the `on_close` hook (requires `persist`). Decode/encode failures are non-fatal (fall back to `initial`; warn to stderr). |
 | `.on_init` / `.on_frame` / `.on_close` / `.on_resize` / `.on_focus` | Register lifecycle hooks (called in registration order). |
 | `.plugin(P)` | Register a `Plugin`; plugins are sorted by ascending `priority()`. |
 | `.notify(title, body, urgency)` | Enqueue a toast (urgency 0=low/3 s, 1=normal/5 s, 2=critical/10 s). |
 | `.try_hotkey(mods, key, action)` | Register a global hotkey; `Err(HotkeyConflict)` on duplicate `(mods, key)`. |
 | `.register_command(name, shortcut)` | Add a command to the palette. |
 | `.command_matches(query) -> Vec<String>` | Fuzzy-search command labels (subsequence match). |
+| `.with_design_tokens(tokens)` / `.with_typography(scale)` / `.design_tokens()` / `.typography()` | Set/read `oxiui_theme::DesignTokens` / `TypographyScale` beyond the theme's `Palette`, for backends and layout engines that need the spacing scale at frame time. |
+| `.open_window(WindowConfig) -> WindowId` / `.close_window(id)` / `.secondary_windows()` / `.window_channel()` | Multi-window registry (`oxiui::multiwindow`). Descriptors are queued for backends to open as OS windows (egui `show_viewport_deferred` / iced `multi_window` dispatch is planned for M7); `WindowChannel` carries cross-window messages today. |
+| `.menu_bar(F)` / `.with_menu_bar(MenuBar)` / `.get_menu_bar()` | Build or attach a cross-platform menu bar (`oxiui::menu`). Pure data model — backend translation (egui `egui-menu` / iced `widget::menu`) is planned for M7. |
+| `.file_dialog(...)` / `.file_save_dialog(...)` / `.message_dialog(...)` / `.confirm_dialog(...)` / `.prompt_dialog(...)` / `.poll_dialog(id)` / `.respond_dialog(id, resp)` / `.dialog_queue()` | Pure in-process dialog request/response queue (`oxiui::dialog::DialogQueue`) — headless-testable, no OS dialog. Needs no feature flag. |
+| `.file_dialog_native(...)` / `.message_dialog_native(...)` | Blocking native OS file-picker / message-box dialogs via `rfd` (requires `dialogs`; no-op fallback without it). |
+| `.soft_renderer() -> SoftRenderer` | Construct an off-screen `oxiui_render_soft::SoftRenderer` for custom rendering/compositing (requires `software`). |
 | `.notifications()` / `.hotkeys()` / `.extra_fonts()` | Read-only accessors for testing. |
 | `.run() -> Result<AppExit, UiError>` | Launch the native window + event loop (dispatches by backend). |
-| `.run_headless_once() -> Result<AppExit, UiError>` | Run one synthetic frame against a no-op `UiCtx` (no window; fires init/frame hooks + plugins). |
+| `.run_headless_once() -> Result<AppExit, UiError>` | Run one synthetic frame against a no-op `UiCtx` (no window; fires init/frame hooks + plugins, including `on_close` — so `.with_persistent_state` persists deterministically in headless runs too). |
 | `.run_with_return(F) -> Result<T, UiError>` | Run `content` once headlessly and forward its return value. |
 | `.screenshot() -> Result<Vec<u8>, UiError>` | Render a headless frame to PNG bytes (requires `software`; else `UiError::Unsupported`). |
 | `.build_a11y_snapshot(window_id) -> A11yTree` | Record content through `RecordingUiCtx` into an accessibility tree (requires `a11y`). |
@@ -140,12 +151,16 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | Item | Kind | Description |
 |------|------|-------------|
 | [`BackendRunner`] | trait | Object-safe trait decoupling backend selection from `App::run`; `run(self, config, content, lifecycle)`. |
-| [`LifecycleConfig`] | struct | Optional `on_close` / `on_resize` / `on_focus` callbacks passed to a runner. |
+| [`LifecycleConfig`] | struct | `on_close` / `on_resize` / `on_focus` hook vectors passed to a runner. |
 | `ContentFn` | type alias | `Box<dyn FnMut(&mut dyn UiCtx) + Send>`. |
-| [`EguiRunner`] | struct | egui runner (wiring stub for M6; requires `egui`). |
-| `IcedRunner` | struct | iced runner (wiring stub for M6; requires `iced`). |
+| [`EguiRunner`] | struct | Live egui runner — owns the `eframe::run_native` loop (requires `egui`). |
+| `IcedRunner` | struct | Live iced runner — owns the `iced::application` loop (requires `iced`). |
 
-> Note: `EguiRunner` / `IcedRunner` are stable public types but currently wiring stubs — the live render paths remain inside `App::run`. Full delegation lands in M6.
+> `EguiRunner` / `IcedRunner` own the live event loops: `App::run()` moves its
+> theme, hooks, and plugins into the matching runner and delegates via
+> `BackendRunner::run`. A `runner::LifecycleTracker` deduplicates window
+> size/focus/close snapshots so `on_resize` / `on_focus` fire only on real
+> changes and `on_close` fires at most once.
 
 ### Re-exported modules
 
@@ -162,10 +177,15 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | `oxiui::table` | `table` | Glob re-export of `oxiui-table`. |
 | `oxiui::accessibility` | `a11y` | `A11yTree`, `A11yNode`, `WidgetRole`. |
 | `oxiui::recording` | `a11y` | `RecordingUiCtx`, `RecordingEntry`. |
+| `oxiui::multiwindow` | — | `WindowRegistry`, `SecondaryWindow`; backs `App::open_window`/`close_window`. |
+| `oxiui::dialog` | — | Pure in-process `DialogQueue`, `DialogKind`, `DialogResponse`, `DialogId`; backs `App::file_dialog` and friends. |
+| `oxiui::menu` | — | `MenuBar`, `MenuBarBuilder`, `Menu`, `MenuItem` — closure-based menu-bar DSL; backs `App::menu_bar`. |
+| `oxiui::native_dialog` | `dialogs` | `open_file_dialog`, `save_file_dialog`, `message_dialog`, `confirm_dialog` — blocking `rfd`-backed native dialogs; backs `App::*_dialog_native`. |
+| `oxiui::logging` | `tracing` | `init_logging`, `LogLevel` — installs a `tracing-subscriber` fmt subscriber respecting `RUST_LOG`. |
 
 ### Crate-root re-exports
 
-From `oxiui-core` at the crate root: `ButtonResponse`, `Color`, `FontSpec`, `Palette`, `Theme`, `UiCtx`, `UiError`. From `runner`: `BackendRunner`, `LifecycleConfig` (always), plus `EguiRunner` (`egui`) and `IcedRunner` (`iced`). From `theme_picker`: `theme_by_name`, `theme_picker`, `BUILTIN_THEMES`.
+From `oxiui-core` at the crate root: `ButtonResponse`, `Color`, `FontSpec`, `Palette`, `Theme`, `UiCtx`, `UiError`. From `runner`: `BackendRunner`, `LifecycleConfig` (always), plus `EguiRunner` (`egui`) and `IcedRunner` (`iced`). From `theme_picker`: `theme_by_name`, `theme_picker`, `BUILTIN_THEMES`. From `multiwindow`: `SecondaryWindow`. From `dialog`: `DialogId`, `DialogKind`, `DialogQueue`, `DialogResponse`. From `menu`: `Menu`, `MenuBar`, `MenuBarBuilder`, `MenuItem`. From `native_dialog`: `DialogResult`, `MessageLevel`.
 
 ### Web (wasm32) entry point
 
@@ -188,8 +208,12 @@ Features fall into two groups: **render backends** (how pixels reach the screen)
 |---------|----------|-------------|
 | `egui` | `oxiui-egui`, `oxiui-render-wgpu`, `egui`, `eframe`, `png` | egui + eframe immediate-mode backend (default). Enables the `with_egui_ctx` escape hatch and `Backend::Egui`. |
 | `iced` | `oxiui-iced`, `iced` | iced retained-mode backend; enables `Backend::Iced` and `IcedRunner`. |
-| `slint` | `oxiui-slint` (+ its `slint`) | Slint adapter; enables `Backend::Slint`. **GPL-3.0 OR royalty-free OR commercial** — verify license compatibility. |
 | `dioxus` | `oxiui-dioxus` (+ its `dioxus`) | Dioxus reactive adapter (`minimal` Pure-Rust set); enables `Backend::Dioxus`. |
+
+> **No `slint` feature.** The facade's `slint` feature was removed in 0.2.0 — `oxiui-slint`
+> pulls in a C fontconfig binding (`yeslogic-fontconfig-sys`) on Linux with no pure
+> opt-out, so it can no longer be aggregated into the facade's Pure Rust closure. Use
+> the standalone [`oxiui-slint`](../oxiui-slint) crate directly instead.
 
 ### Capability modules
 
@@ -197,6 +221,9 @@ Features fall into two groups: **render backends** (how pixels reach the screen)
 |---------|----------|-------------|
 | `table` | `oxiui-table` | Table widget; enables `oxiui::table::*` and `App::table`. |
 | `a11y` | `oxiui-accessibility`, `accesskit` | Accessibility tree builder; enables `oxiui::accessibility`, `oxiui::recording`, and `App::build_a11y_snapshot`. |
+| `persist` | `oxicode` | Enables `App::with_persistent_state`, which loads/saves app state to disk via `oxicode` (see below). |
+| `dialogs` | `rfd` | Enables `oxiui::native_dialog` and the `App::*_dialog_native` methods — blocking native OS file-picker / message-box dialogs. The built-in in-process `oxiui::dialog::DialogQueue` (`App::file_dialog`, `App::message_dialog`, …) needs no feature and works headlessly. |
+| `tracing` | `tracing`, `tracing-subscriber` | Enables `oxiui::logging::init_logging`, installing a `tracing-subscriber` fmt subscriber for OxiUI's `frame`/`layout`/`paint`/`event` spans. |
 | `default` | `gpu` + `egui` | Boots an egui app rendered via wgpu. |
 
 > **Note:** there is no `web` feature. The wasm32 browser entry point lives in the unpublished [`oxiui-web`](../oxiui-web) crate (`publish = false`), used as a copy-template — see [Web (wasm32) entry point](#web-wasm32-entry-point) above.
@@ -227,7 +254,6 @@ The crate ships runnable examples (see `examples/`):
 cargo run --example hello                              # egui (default)
 cargo run --example hello_iced   --features iced       # iced backend
 cargo run --example hello_table  --features table      # table widget
-cargo run --example hello_slint  --features slint      # Slint adapter
 cargo run --example hello_dioxus --features dioxus     # Dioxus adapter
 ```
 
@@ -244,7 +270,7 @@ cargo run --example hello_dioxus --features dioxus     # Dioxus adapter
 | [`oxiui-render-wgpu`](../oxiui-render-wgpu) | wgpu GPU renderer (`gpu` feature). |
 | [`oxiui-egui`](../oxiui-egui) | egui + eframe backend (`egui` feature). |
 | [`oxiui-iced`](../oxiui-iced) | iced retained-mode backend (`iced` feature). |
-| [`oxiui-slint`](../oxiui-slint) | Slint adapter (`slint` feature). |
+| [`oxiui-slint`](../oxiui-slint) | Slint adapter. **Not** a facade feature (removed in 0.2.0, KNOWN-NON-PURE) — depend on it directly instead. |
 | [`oxiui-dioxus`](../oxiui-dioxus) | Dioxus adapter (`dioxus` feature). |
 | [`oxiui-web`](../oxiui-web) | wasm32 browser entry point — unpublished (`publish = false`) copy-template, not a facade feature/dependency. |
 

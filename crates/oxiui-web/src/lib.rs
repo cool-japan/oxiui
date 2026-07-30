@@ -498,7 +498,6 @@ pub fn cursor_css(shape: oxiui_core::CursorShape) -> &'static str {
 ///
 /// Returns `Err` with a [`MountError::InitFailed`] discriminant if the DOM
 /// operation fails on wasm32.
-#[allow(unused_variables)]
 pub fn apply_cursor(canvas_id: &str, shape: oxiui_core::CursorShape) -> Result<(), MountError> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -516,6 +515,7 @@ pub fn apply_cursor(canvas_id: &str, shape: oxiui_core::CursorShape) -> Result<(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (canvas_id, shape);
         Ok(())
     }
 }

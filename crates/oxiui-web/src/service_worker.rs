@@ -31,7 +31,6 @@ pub type ServiceWorkerCallback = Box<dyn FnOnce(Result<String, String>) + 'stati
 /// `Err` is delivered if:
 /// - `navigator.serviceWorker` is not available (non-secure context or old browser).
 /// - The browser rejects the registration (network error, scope conflict, etc.).
-#[allow(unused_variables)]
 pub fn register_service_worker(script_url: &str, callback: ServiceWorkerCallback) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -70,6 +69,7 @@ pub fn register_service_worker(script_url: &str, callback: ServiceWorkerCallback
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = script_url;
         callback(Err(
             "service workers not available on this target".to_string()
         ));
@@ -98,7 +98,6 @@ pub type UnregisterCallback = Box<dyn FnOnce(Result<u32, String>) + 'static>;
 /// # Errors (callback)
 ///
 /// Returns `Err` if the service worker API is unavailable or fails.
-#[allow(unused_variables)]
 pub fn unregister_all_service_workers(callback: UnregisterCallback) {
     #[cfg(target_arch = "wasm32")]
     {

@@ -1,7 +1,18 @@
 # oxiui-iced TODO
 
 ## Status
-Working iced adapter (~235 SLOC across lib.rs, adapter.rs, theme.rs). Provides `IcedUiCtx` that collects widget specs (heading/label/button) and builds an iced `Column` element. Theme mapping via `palette_to_iced_theme()`. IME forwarding is a no-op stub (iced 0.14 lacks public IME injection API). Message round-trip (button click state) is wired. Main gaps: limited widget coverage (only heading/label/button), no text input, no layout control beyond vertical column.
+Mature iced adapter (~2000 SLOC across `lib.rs`, `adapter.rs`, `theme.rs`,
+`a11y_bridge.rs`). `IcedUiCtx` collects all `UiCtx` widget calls (heading/label/
+button/text_input/text_area/checkbox/slider/dropdown/image/separator/spacer/
+scroll_area/tooltip/popup/modal/horizontal/vertical/grid/rich_text) into
+`WidgetSpec`s and materialises them into an iced `Column`/`Row` element tree.
+Full state round-trip via `apply_message`/`IcedConfig`/`WidgetState`, theming via
+`palette_to_iced_theme()`/`palette_and_tokens_to_iced_theme()`, keyboard event
+mapping, spec-fingerprint change detection (`SpecCache`), a custom `OxiIcedWidget`,
+and a feature-gated `a11y_bridge` module (`WidgetSpec` → `accesskit::TreeUpdate`).
+146 tests pass with `--all-features`. IME forwarding remains a no-op stub (iced 0.14
+exposes no public per-widget IME injection API); modal/popup are best-effort
+within-cell overlays rather than true root-level overlays.
 
 ## Core Implementation
 - [x] Text input widget: `UiCtx::text_input()` → `iced::widget::text_input`, two-way binding (display current value, emit on-change), placeholder text, password mode (~120 SLOC)

@@ -1,6 +1,6 @@
 # OxiUI TODO
 
-**v0.2.0 released 2026-06-23** | **v0.1.3 released 2026-06-20** | **v0.1.2 released 2026-06-10** — Pure Rust Policy v2: GTK/inotify quarantined, 16 crates, Pure Rust facade.
+**v0.2.1 released 2026-07-30** | **v0.2.0 released 2026-06-23** | **v0.1.3 released 2026-06-20** — Pure Rust Policy v2: GTK/inotify quarantined, 16 crates, Pure Rust facade.
 
 Milestones derived from `../phase3/oxiui_blueprint.md` §Phased milestones.
 
@@ -176,3 +176,23 @@ requirements are maintained in each subcrate's directory:
    `oxiui-render-wgpu` now provides `SurfaceContext` for windowed rendering.
    Migration is blocked only on **crates.io publication** of both sub-crates.
    See **M6** below for the publication + migration milestone.
+
+
+---
+
+<!-- production-readiness-backlog 2026-07-16 -->
+## Production-Readiness Backlog — 2026-07-16
+
+_Consolidated from static audit + Opus adversarial bug-hunt (48 verified defects across noffi) + baseline nextest/clippy + design investigation. See `../NOFFI_PRODUCTION_BACKLOG.md` for the full cross-project list and severity/model legend. Not implemented; no commits._
+
+**Confirmed bugs — Opus-verified (software rasterizer, unbounded/overflow on unclamped coords):**
+- [x] **S · high** `oxiui-render-soft/src/scanline.rs:238` — fill loop iterates full vertical extent from vertex coords, never clamped to framebuffer height → billions of iterations from one large Y. R2/N0. Fixed via `fill_polygon`'s Y-range clamp to framebuffer height (`fill_polygon_with_scratch` in `crates/oxiui-render-soft/src/scanline.rs`) plus an edge fast-forward so partially-offscreen shapes still render correctly. Covered by new tests `fill_polygon_far_out_of_bounds_is_clamped_and_fast` and `fill_polygon_partial_offscreen_top_still_paints_visible_rows`.
+- [x] **S · med** `oxiui-render-soft/src/scanline.rs:358` — `paint_span` `for px in x0..x1` from raw float X, no width clamp → billions of no-op iterations. R2/N0. Fixed via a width clamp in `paint_span` before the `x0..x1` loop. Covered by new test `paint_span_far_out_of_bounds_x_is_clamped`.
+- [x] **S · med** `oxiui-render-soft/src/blend.rs:314` — `composite_into` computes `w*h*4` guard and `(j*w+i)*4` index in u32 → overflow defeats bounds check. R2/N0. Fixed via checked `usize` arithmetic for the required-length guard (treats overflow as "unsatisfiable", returns 0). Covered by new tests `composite_into_near_u32_boundary_does_not_overflow_or_panic` and `composite_into_exact_u32_boundary_dims_no_panic`.
+- Fix: clamp raster spans to framebuffer rect; do size math in usize/checked.
+**Flagship realization pass (U1–U5) — completed 2026-07-17:**
+- [x] **A/med · U1** EguiRunner/IcedRunner realization — the live `eframe::run_native` / `iced::application` paths were moved out of `lib.rs` into `runner.rs`. The runners now carry the app's theme/hooks/plugins state; `App::run()` moves its fields into the matching runner (`std::mem::take`) and delegates via `BackendRunner::run`. The runners no longer return `Ok` immediately. wasm/native cfg gating preserved (wasm egui → `Unsupported("use oxiui_web::mount")`; no-backend → `Unsupported`).
+- [x] **A/med-hard/Opus · U2** lifecycle hooks wired. `runner::LifecycleTracker` dedups raw size/focus/close snapshots into `LifecycleEvent`s. egui fires `on_resize`/`on_focus` from per-frame `viewport_rect()`/`focused` polling and `on_close` from `eframe::App::on_exit`. iced fires them from an `event::listen_with` subscription (`Resized`/`Focused`/`Unfocused`/`CloseRequested`), booted with `exit_on_close_request(false)` + `window_size(...)` (the previously-dead width/height are now honoured). Persist-on-close: `with_persistent_state` shares state via `Arc<Mutex<_>>` and encodes to disk in the `on_close` hook (replacing the old `let _ = path` no-op). `run_headless_once` now fires `on_close` after its single frame so persistence is exercised headlessly. Hooks receive a shared `NullUiCtx` (hoisted to `null_ctx.rs`), since lifecycle events fire outside a live frame.
+- [x] **B/easy · U3** all `#[allow(unused_variables)]` (facade `native_dialog`, `oxiui-render-soft` `canvas_upload`/`fft_blur`, `oxiui-tray`, and 21 in `oxiui-web`) replaced with explicit `let _ = (...)` discards inside the inactive-cfg branch. Zero `#[allow(unused_variables)]` remain in the workspace.
+- [x] **B/easy · U4** `fft_blur` feature-off path now forwards to the direct `shadow::gaussian_blur_alpha` blur (numerically equivalent) instead of silently no-oping; the `fft-blur` feature only changes *speed*, never *whether* the blur happens. Covered by `fft_blur_fallback_blurs_when_feature_off`.
+- [x] **B/easy · U5** docs truth pass (this file, runner/lifecycle doc-comments, CHANGELOG). Genuinely out of scope / upstream-blocked, documented honestly rather than as done: `oxiui-charts` (needs a plotting backend that does not exist yet), iced IME injection (no public per-widget IME API in iced 0.14), softbuffer window path, and the `oxiui-web` wasm32 build (pre-existing `web-sys` API drift: `Document::head`/`exec_command`, `FontFace` constructor — unrelated to U1–U5).

@@ -11,10 +11,10 @@ The crate is `#![forbid(unsafe_code)]` and has **zero mandatory external depende
 
 ```toml
 [dependencies]
-oxiui-core = "0.1.3"
+oxiui-core = "0.2.1"
 
 # Enable serde on UiEvent and its nested event types:
-oxiui-core = { version = "0.1.3", features = ["serde"] }
+oxiui-core = { version = "0.2.1", features = ["serde"] }
 ```
 
 ## Quick Start
@@ -80,8 +80,8 @@ assert_eq!(dl.len(), 1);
 | Trait | Role |
 |-------|------|
 | `UiCtx` | Immediate-mode rendering context. Three required methods (`heading`, `label`, `button`) plus ~25 extended widget/container methods with `supported == false` defaults |
-| `Widget` | A renderable element: `render(&mut self, ui: &mut dyn UiCtx)` |
-| `Theme` | `Send + Sync` provider of a [`Palette`] and a [`FontSpec`] |
+| `Widget` | A renderable element: `render(&mut self, ui: &mut dyn UiCtx)`, plus default accessibility hooks `a11y_role() -> A11yRole`, `a11y_label()` / `a11y_description() -> Option<String>` |
+| `Theme` | `Send + Sync` provider of a [`Palette`] and a [`FontSpec`], plus default design-token methods `spacing_tokens()`, `border_tokens()`, `padding_tokens()` |
 | `Layout` | A layout strategy: `axis()` + `spacing()` |
 | `EventSink` | Accepts [`UiEvent`]s for processing via `push` |
 
@@ -116,6 +116,8 @@ All return a `*Response` whose `supported` field is `false` by default; containe
 | `Axis` | `Vertical`, `Horizontal` |
 | `UiEvent` | `#[non_exhaustive]` backend event enum (resize, mouse, key, wheel, IME, …) |
 | `UiError` | `#[non_exhaustive]` error enum (see below) |
+| `A11yRole` | `#[non_exhaustive]` semantic accessibility role (27 variants: `Button`, `Checkbox`, `Slider`, `Dialog`, …), returned by `Widget::a11y_role()`; implements `Display` |
+| `SpacingTokens` / `BorderTokens` / `PaddingTokens` | Design-token structs returned by `Theme::spacing_tokens()` / `border_tokens()` / `padding_tokens()`; COOLJAPAN default scales |
 
 ### `response` module
 
@@ -252,6 +254,16 @@ A linear-arithmetic constraint solver for advanced layout. `Solver` (`add_constr
 ### `widget_ext` module — combinators
 
 `WidgetExt` blanket-implemented for every `Widget`, adding chainable wrappers: `padding`, `margin`, `background`, `border`, `on_click`, `on_hover` (yielding `Padded`, `Margined`, `Backgrounded`, `Bordered`, `OnClick`, `OnHover`). Also: `ClipboardProvider` trait, `DragSource`/`DropTarget` traits, `DragData`, `DropEffect`.
+
+### `window` module — multi-window support
+
+| Item | Description |
+|------|-------------|
+| `WindowId` | Opaque window handle; `WindowId::PRIMARY` is the implicit main window |
+| `WindowConfig` | Builder: `title`, `width`, `height`, `resizable`, `decorations`, `transparent`, `always_on_top` |
+| `WindowEvent` | `#[non_exhaustive]` lifecycle enum: `Created`, `Closed`, `Resized`, `FocusGained`, `FocusLost`, `Message { from, to, payload }` |
+| `WindowChannel` | Thread-safe, `Arc`-backed cross-window message queue; `send`, `drain_messages`, `pending_count` |
+| `WindowManager` | Owns one [`WidgetTree`] per window; `new`, `create_window`, `destroy_window`, `tree`/`tree_mut`, `config`, `window_ids`, `window_count`, `channel`, `resize_window` |
 
 ## Feature Flags
 

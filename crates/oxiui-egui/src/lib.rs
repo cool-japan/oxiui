@@ -493,7 +493,7 @@ pub fn palette_to_egui_visuals(palette: &Palette) -> egui::Visuals {
 ///   and `style.visuals.window_corner_radius`
 ///
 /// The result is a fully configured [`egui::Style`] that can be applied with
-/// [`egui::Context::set_style`].
+/// [`egui::Context::all_styles_mut`].
 pub fn palette_to_egui_visuals_with_tokens(
     palette: &Palette,
     tokens: &DesignTokens,
@@ -552,13 +552,13 @@ pub fn palette_to_egui_visuals_with_tokens(
 ///
 /// The returned [`egui::Style`] carries default visuals. To apply full theming
 /// (colours + tokens), replace the visuals before calling
-/// [`egui::Context::set_style`]:
+/// [`egui::Context::all_styles_mut`]:
 ///
 /// ```rust,ignore
 /// use oxiui_egui::{tokens_to_egui_style, palette_to_egui_visuals};
 /// let mut style = tokens_to_egui_style(&tokens, &typography);
 /// style.visuals = palette_to_egui_visuals(&palette);
-/// ctx.set_style(style);
+/// ctx.all_styles_mut(|s| *s = style.clone());
 /// ```
 pub fn tokens_to_egui_style(
     tokens: &oxiui_theme::DesignTokens,
@@ -624,7 +624,10 @@ pub fn tokens_to_egui_style(
 ///
 /// **IME events:**
 /// - [`UiEvent::ImePreedit`] → [`egui::Event::Ime`](`egui::ImeEvent::Preedit`)
-///   (the cursor range is dropped; egui 0.34 does not carry it).
+///   (`cursor`'s byte-offset range is converted to egui 0.35's char-offset
+///   `active_range_chars`, mirroring the conversion `egui-winit` performs for
+///   raw OS IME events; egui 0.34 and earlier accepted only a bare `String`
+///   and any cursor hint was dropped).
 /// - [`UiEvent::ImeCommit`] → [`egui::Event::Ime`](`egui::ImeEvent::Commit`)
 ///
 /// **Keyboard events (extended):**
@@ -655,12 +658,24 @@ pub fn tokens_to_egui_style(
 /// `#[non_exhaustive]`).
 pub fn forward_event_to_egui(ctx: &egui::Context, event: &UiEvent) {
     match event {
-        UiEvent::ImePreedit { text, cursor: _ } => {
-            // cursor is intentionally dropped: egui 0.34 ImeEvent::Preedit(String)
-            // does not carry a cursor position.
+        UiEvent::ImePreedit { text, cursor } => {
+            // `cursor` is a *byte*-offset `(start, end)` range into `text`;
+            // egui 0.35's `ImeEvent::Preedit::active_range_chars` wants a
+            // *char*-offset `Range<usize>`. Convert the same way
+            // `egui-winit::State::on_ime` converts winit's raw byte range,
+            // using `str::get` so a range that lands off a UTF-8 char
+            // boundary (or out of bounds) safely degrades to `None` instead
+            // of panicking on a bad slice index.
+            let active_range_chars = cursor.and_then(|(start, end)| {
+                let start_chars = text.get(..start)?.chars().count();
+                let middle_chars = text.get(start..end)?.chars().count();
+                Some(start_chars..start_chars + middle_chars)
+            });
             ctx.input_mut(|i| {
-                i.events
-                    .push(egui::Event::Ime(egui::ImeEvent::Preedit(text.clone())));
+                i.events.push(egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: text.clone(),
+                    active_range_chars,
+                }));
             });
         }
         UiEvent::ImeCommit(text) => {
@@ -945,7 +960,7 @@ fn palettes_equal(a: &Palette, b: &Palette) -> bool {
 ///
 /// - **Design-token style** — when [`StatefulEguiAdapter::with_design_tokens`] is called, the
 ///   adapter additionally calls [`tokens_to_egui_style`] and
-///   [`egui::Context::set_style`] on the first frame (tokens are static once
+///   [`egui::Context::all_styles_mut`] on the first frame (tokens are static once
 ///   configured). Palette colours are merged into the style so they are not
 ///   lost when both palette and tokens are present.
 ///
@@ -1060,7 +1075,7 @@ impl StatefulEguiAdapter {
     /// - Applies design-token style exactly once (the first call, if tokens were set).
     ///   When palette colours are also present, they are merged into the token style.
     /// - Recomputes and applies visuals only when the palette has changed
-    ///   (skipped when design-token style is active — tokens mode uses `set_style`).
+    ///   (skipped when design-token style is active — tokens mode uses `all_styles_mut`).
     pub fn apply(&mut self, ctx: &egui::Context) {
         // ── font loading (at most once) ───────────────────────────────────────
         if !self.fonts_loaded {

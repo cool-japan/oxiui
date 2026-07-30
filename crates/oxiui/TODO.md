@@ -1,7 +1,20 @@
 # oxiui (facade) TODO
 
 ## Status
-Working facade crate (~403 SLOC). Provides `App` builder with `.theme()`, `.content()`, `.backend()`, `.run()` API. Supports egui backend (default, via eframe), iced backend (feature-gated), headless mode (`run_headless_once`). Re-exports core types, theme constructors, table module, accessibility module, and web module (all feature-gated). The facade successfully runs GUI apps on desktop (macOS/Linux/Windows). Main gaps: no window configuration beyond title/size, no multi-window, no lifecycle hooks, no plugin system, no app state management.
+Mature facade crate (~1530 SLOC in `src/lib.rs`, ~4800 SLOC total). `App` builder
+covers window config, theming (palette + `DesignTokens`/`TypographyScale`), content
+closures (stateless, `with_state`, and `with_persistent_state` via `oxicode`),
+multi-window registration, a native menu-bar data model, in-process + native (`rfd`)
+dialogs, plugins, global hotkeys, a fuzzy command palette, toast notifications, and
+lifecycle hooks. `App::run()` dispatches to a pluggable `BackendRunner`: `EguiRunner`
+and `IcedRunner` (`crates/oxiui/src/runner.rs`) own the *real* `eframe::run_native` /
+`iced::application` event loops and fire `on_close`/`on_resize`/`on_focus` for real
+(deduplicated via `runner::LifecycleTracker`) — these were stubs through M6 and
+became live in the 0.2.1 cycle. Headless mode (`run_headless_once`) and a Dioxus
+backend (headless collection mode) round out the picture. 159 tests pass with
+`--all-features`. Main remaining gap: wasm32 auto-dispatch from `App::run()` (see the
+`[~]` item below) and M7 backend rendering for the menu-bar / multi-window data
+models (registered but not yet drawn by the egui/iced backends).
 
 ## Core Implementation
 - [x] Window configuration: `App::window()` builder with `inner_size`, `min_size`, `max_size`, `resizable`, `decorations`, `transparent`, `always_on_top`, `icon`, `position`, `fullscreen` (~100 SLOC)
@@ -25,8 +38,9 @@ Working facade crate (~403 SLOC). Provides `App` builder with `.theme()`, `.cont
   - **Files:** `crates/oxiui/src/lib.rs` (TODO marker only).
   - **Tests:** Existing plugin tests pass.
   - **Risk:** None — stale marker flip only.
-- [x] Backend abstraction: `BackendRunner` trait that egui/iced/slint/dioxus backends implement, `App::run()` dispatches to the selected backend's runner, unified error handling (~100 SLOC)
-    - **Completed 2026-05-29:** `BackendRunner` trait + `LifecycleConfig` in new `crates/oxiui/src/runner.rs`; `EguiRunner` and `IcedRunner` stubs implemented (live dispatch remains in `run_egui_or_fallback`/`run_iced` for M6 full wiring); cfg-gated re-exports in lib.rs; 3 tests pass. lib.rs at 1726 lines (under 2000, no splitrs needed).
+- [x] Backend abstraction: `BackendRunner` trait that egui/iced/dioxus backends implement, `App::run()` dispatches to the selected backend's runner, unified error handling (~100 SLOC)
+    - **Completed 2026-05-29:** `BackendRunner` trait + `LifecycleConfig` in new `crates/oxiui/src/runner.rs`; `EguiRunner` and `IcedRunner` stubs implemented (live dispatch remained in the old `run_egui_or_fallback`/`run_iced` functions for M6 full wiring); cfg-gated re-exports in lib.rs; 3 tests pass. lib.rs at 1726 lines (under 2000, no splitrs needed).
+    - **Completed (0.2.1 cycle):** `EguiRunner`/`IcedRunner` are now the *live* runners — `BackendRunner::run` itself boots `eframe::run_native` / `iced::application` (see `EguiRunner::run_native` and the `IcedRunner::run` impl in `runner.rs`, and `crate::egui_backend`/`crate::iced_backend`). `App::run_egui_dispatch`/`run_iced_backend` (renamed from `run_egui_or_fallback`/`run_iced`) move the app's theme/hooks/plugins into the runner and delegate via `BackendRunner::run` — no more "stub that returns `Ok(AppExit::RequestedByUser)` without doing anything". `EguiRunner::new()`/`IcedRunner::new()` plus a `.theme(...)` builder now exist for dependency injection. `on_close`/`on_resize`/`on_focus` fire from the real event loops via the new `runner::LifecycleTracker`/`LifecycleEvent` dedup layer (egui polls viewport size/focus each frame + `eframe::App::on_exit`; iced subscribes via `iced::event::listen_with`). `LifecycleConfig` fields changed from single closures to `Vec<HookFn>` to carry the app's real hook vectors.
     - **Files:** `crates/oxiui/src/runner.rs` (new), `crates/oxiui/src/lib.rs`
 - [x] System tray integration: `App::with_tray(TrayConfig)` for background apps, tray icon, tray menu, click-to-show/hide window (~80 SLOC)
   - **Completed 2026-06-03:** `src/tray.rs` — `TrayConfig` struct (icon_path, icon_bytes, tooltip, menu_items), `TrayMenuItem` enum (Action/Separator/SubMenu), `TrayHandle::mount(TrayConfig)` creates the OS tray icon when `tray` feature enabled (via `tray-icon 0.24` crate). `App::with_tray(TrayConfig) -> Result<Self, String>` builder. 8 unit tests pass (config builder, handle mount no-op without feature). With `tray` feature: menu-click callbacks are stored at data-model level; full event-loop integration (callbacks firing during eframe loop) is planned for a future release (basic implementation).
@@ -127,9 +141,9 @@ Working facade crate (~403 SLOC). Provides `App` builder with `.theme()`, `.cont
     - **Risk:** RecordingUiCtx must implement the 7 new UiCtx extension methods (Stage 2 depends on Stage 1/A landing them); run recording.rs only after Stage 1 is green; WidgetRole lives in oxiui-accessibility (not core) — check oxiui facade's Cargo.toml has oxiui-accessibility dep
 - [~] `oxiui-web` integration: `App::run()` on wasm32 target should auto-detect and use `oxiui-web::mount()`
   - **Goal:** On `wasm32`, `App::run()` automatically routes to `oxiui_web::mount()` instead of returning `Err(Unsupported)`.
-  - **Status (S4):** The `#[cfg(all(feature = "egui", target_arch = "wasm32"))]` branch of `run_egui_or_fallback` exists and correctly returns `Err(UiError::Unsupported)` directing users to `oxiui_web::mount()`. The `web` feature module now carries `#[cfg_attr(docsrs, doc(cfg(feature = "web")))]`. Full auto-dispatch (calling mount() directly from App::run()) is deferred: requires wasm32 cross-compilation to verify safely, and `oxiui_web::mount`'s exact signature needs review for the integration point.
-  - **BLOCKED: Requires wasm32 cross-compilation (`cargo build --target wasm32-unknown-unknown`) to test. The `oxiui_web::mount` signature takes a `HtmlCanvasElement` canvas ID string that must be passed through `AppConfig` — this is an API design decision that needs to be made before auto-dispatch can be wired. Deferred until wasm32 build infra is in place.**
-  - **Files:** `crates/oxiui/src/lib.rs`.
+  - **Status (current):** The `#[cfg(target_arch = "wasm32")]` branch of `EguiRunner::run` (`crates/oxiui/src/runner.rs`, reached via `App::run_egui_dispatch` — renamed from the old `run_egui_or_fallback`) exists and correctly returns `Err(UiError::Unsupported("On wasm32, use oxiui_web::mount(canvas_id) instead of App::run()."))`. There is no `web` Cargo feature or module on the facade (that S4-era plan was superseded): `oxiui-web` is a separate, unpublished (`publish = false`) copy-template crate, not a facade dependency — see the README's "Web (wasm32) entry point" section. Full auto-dispatch (calling `mount()` directly from `App::run()`) stays deferred for the same reasons as before.
+  - **BLOCKED: Requires wasm32 cross-compilation (`cargo build --target wasm32-unknown-unknown`) to test. The `oxiui_web::mount` signature takes a canvas-id string and is `async` (wasm32-only), which does not fit `App::run()`'s synchronous, cross-target signature — this is an API design decision that needs to be made before auto-dispatch can be wired. Deferred until wasm32 build infra is in place.**
+  - **Files:** `crates/oxiui/src/lib.rs`, `crates/oxiui/src/runner.rs`.
 - [x] COOLJAPAN ecosystem: app state persistence via oxicode (not bincode); asset bundling via oxiarc-* (not zip); no C/C++ dependencies in the facade itself
   - **Completed 2026-06-03:** `App::with_persistent_state<State: Encode+Decode+Send+'static>(initial, path, content)` loads state from `path` via `oxicode::decode_value`, runs content, and captures state for persistence. Load errors are non-fatal (falls back to `initial`, warns to stderr). New `persist` feature gates `dep:oxicode`. No C/C++ deps in the facade (verified: `default = ["gpu","egui"]` is Pure Rust). Asset bundling via oxiarc-* is deferred (no asset pipeline in current scope).
   - **Files:** `crates/oxiui/Cargo.toml` (persist feature), `crates/oxiui/src/lib.rs` (App::with_persistent_state).

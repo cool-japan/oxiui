@@ -1,6 +1,6 @@
 # OxiUI
 
-**v0.2.0 released 2026-06-23** | v0.1.3 released 2026-06-20
+**v0.2.1 released 2026-07-30** | v0.2.0 released 2026-06-23 | v0.1.3 released 2026-06-20
 
 OxiUI is the COOLJAPAN-blessed Pure Rust UI layer: no GTK (C), no Qt (C++), no
 SDL (C), no system widgets, no raw AppKit / Win32 / Cocoa bindings. It is a
@@ -11,7 +11,7 @@ windowed through **winit**, with all text shaped through **OxiText** +
 build with a single `cargo build` in a fresh `rust:slim` container, with no
 `libgtk-dev`, `libqt-dev`, or `libsdl2-dev` choreography.
 
-## Status: v0.2.0 released 2026-06-23 — Pure Rust Policy v2
+## Status: v0.2.1 released 2026-07-30 — Pure Rust Policy v2
 
 All planned milestones through M6 are done:
 
@@ -24,6 +24,23 @@ All planned milestones through M6 are done:
 | M4 | accesskit a11y + wasm32 entry point + IME CJK events | ✓ |
 | M5 | softbuffer headless stable + high-contrast WCAG-AAA + slint/dioxus adapters | ✓ |
 | M6 | `oxiui-compute-wgpu` + `oxiui-render-wgpu` published to crates.io | ✓ |
+
+## What's new in 0.2.1
+
+- **Lifecycle hooks are live** — `on_close` / `on_resize` / `on_focus` now
+  actually fire on both the egui and iced backends (previously wired but
+  dormant).
+- **`EguiRunner` / `IcedRunner` are real `BackendRunner`s** — they own the
+  live `eframe::run_native` / `iced::application` event loop instead of
+  returning immediately.
+- **`with_persistent_state` now genuinely persists** — state is written to
+  disk from the `on_close` hook instead of being silently discarded.
+- **Two `oxiui-render-soft` security hardening fixes** — an integer-overflow
+  bounds-check bypass in `composite_into`, and an unbounded-iteration DoS in
+  the scanline/blend rasterizer paths, both closed with checked arithmetic
+  and framebuffer-clamped iteration.
+
+No breaking changes in 0.2.1. See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Breaking changes in 0.2.0
 
@@ -40,13 +57,13 @@ All planned milestones through M6 are done:
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.2.0"
+oxiui = "0.2.1"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.2.0", default-features = false, features = ["software"] }
+oxiui = { version = "0.2.1", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.2.0", features = ["iced"] }
+oxiui = { version = "0.2.1", features = ["iced"] }
 ```
 
 ```rust
@@ -77,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `oxiui-table` | `table` | Virtualized table — `RowSource` trait, egui + iced backends, sorting/filtering |
 | `oxiui-accessibility` | `a11y` | accesskit a11y tree — `A11yNode`, `A11yTree`, headless unit-testable |
 | `oxiui-web` | `web` | wasm32 entry point — `mount()` on `<canvas>`, key mapping, non-wasm stubs |
-| `oxiui-slint` | `slint` | slint 1.16.1 optional adapter — `SlintCtx`, headless collection mode |
+| `oxiui-slint` | `slint` | slint 1.17.0 optional adapter — `SlintCtx`, headless collection mode |
 | `oxiui-dioxus` | `dioxus` | dioxus 0.7 optional adapter — `DioxusCtx` reactive bridge |
 | `oxiui-tray` | (quarantine) | §5 system-tray adapter — `tray` feature pulls GTK on Linux; opt-in only |
 | `oxiui-hot-reload-notify` | (quarantine) | §5 WGSL hot-reload via `notify` — pulls inotify/fsevent-sys; opt-in only |
@@ -85,8 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Tests
 
-1 964 tests across 16 crates — all pass
-(`cargo nextest run --all-features`). 5 tests skipped (GPU/display-required).
+1969 tests across 16 crates — all pass
+(`cargo nextest run --all-features --workspace`). 5 tests skipped (GPU/display-required).
 
 ## Replaces (FFI being eliminated)
 

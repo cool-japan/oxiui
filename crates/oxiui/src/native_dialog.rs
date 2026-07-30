@@ -82,7 +82,6 @@ pub enum DialogResult {
 ///
 /// Requires the `dialogs` feature.  On non-desktop / CI builds where `rfd`
 /// cannot show a real dialog this falls back to `Cancelled`.
-#[allow(unused_variables)]
 pub fn open_file_dialog(title: &str, filters: &[(&str, &str)], multiple: bool) -> DialogResult {
     #[cfg(feature = "dialogs")]
     {
@@ -118,6 +117,7 @@ pub fn open_file_dialog(title: &str, filters: &[(&str, &str)], multiple: bool) -
     }
     #[cfg(not(feature = "dialogs"))]
     {
+        let _ = (title, filters, multiple);
         DialogResult::Cancelled
     }
 }
@@ -134,7 +134,6 @@ pub fn open_file_dialog(title: &str, filters: &[(&str, &str)], multiple: bool) -
 /// # Feature
 ///
 /// Requires the `dialogs` feature.
-#[allow(unused_variables)]
 pub fn save_file_dialog(
     title: &str,
     default_name: Option<&str>,
@@ -159,6 +158,7 @@ pub fn save_file_dialog(
     }
     #[cfg(not(feature = "dialogs"))]
     {
+        let _ = (title, default_name, filters);
         DialogResult::Cancelled
     }
 }
@@ -176,7 +176,6 @@ pub fn save_file_dialog(
 ///
 /// Requires the `dialogs` feature.  Without it this is a no-op that
 /// returns `DialogResult::Confirmed` immediately.
-#[allow(unused_variables)]
 pub fn message_dialog(title: &str, message: &str, level: MessageLevel) -> DialogResult {
     #[cfg(feature = "dialogs")]
     {
@@ -195,6 +194,7 @@ pub fn message_dialog(title: &str, message: &str, level: MessageLevel) -> Dialog
     }
     #[cfg(not(feature = "dialogs"))]
     {
+        let _ = (title, message, level);
         DialogResult::Confirmed
     }
 }
@@ -207,7 +207,6 @@ pub fn message_dialog(title: &str, message: &str, level: MessageLevel) -> Dialog
 /// # Feature
 ///
 /// Requires the `dialogs` feature.
-#[allow(unused_variables)]
 pub fn confirm_dialog(title: &str, message: &str) -> DialogResult {
     #[cfg(feature = "dialogs")]
     {
@@ -226,6 +225,7 @@ pub fn confirm_dialog(title: &str, message: &str) -> DialogResult {
     }
     #[cfg(not(feature = "dialogs"))]
     {
+        let _ = (title, message);
         DialogResult::Cancelled
     }
 }

@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OxiUI wasm32 entry point — mounts an OxiUI app on an HTML canvas"
+readme = "README.md"
 categories = ["gui", "wasm"]
 keywords = ["gui", "wasm", "cooljapan", "oxiui", "wasm-bindgen"]
 publish = false

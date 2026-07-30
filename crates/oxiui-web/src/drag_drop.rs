@@ -110,7 +110,6 @@ impl DragEvent {
 /// # Errors
 ///
 /// Returns `Err` if any DOM binding operation fails.
-#[allow(unused_variables)]
 pub fn bind_drag_events<F>(canvas_id: &str, on_event: F) -> Result<(), String>
 where
     F: Fn(DragEvent) + 'static,
@@ -210,6 +209,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (canvas_id, on_event);
         Ok(())
     }
 }

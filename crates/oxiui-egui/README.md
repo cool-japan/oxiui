@@ -11,8 +11,14 @@ Both egui and eframe are **Pure Rust** GUI frameworks, so this adapter keeps the
 
 ```toml
 [dependencies]
-oxiui-egui = "0.1.3"
+oxiui-egui = "0.2.1"
 ```
+
+`oxiui-egui` depends only on [`egui`] itself (plus `oxiui-core`/`oxiui-text`/`oxiui-theme`) —
+bring your own [`eframe`] (or other windowing/event-loop shell) if you need a full
+native application; every function here takes an `&egui::Context` / `&mut egui::Ui`
+so it works the same whether that context comes from `eframe` or a hand-rolled
+`egui-winit` + `wgpu` loop.
 
 ## Quick Start
 
@@ -126,9 +132,35 @@ Caches expensive operations across frames so repeated `apply` calls are cheap wh
 | `visuals_recompute_count` (field) | Number of times visuals were recomputed (instrumentation) |
 | `fonts_load_count` (field) | Number of `set_fonts` calls (≤ 1 in normal use) |
 
+### Accessibility bridge (`a11y` feature)
+
+Bridges `oxiui-accessibility`'s `A11yTree` into `accesskit::TreeUpdate`s, feeding
+egui's built-in AccessKit integration (forward the update to the platform adapter,
+e.g. `accesskit_winit::Adapter::update_if_active`).
+
+| Item | Description |
+|------|-------------|
+| `oxiui_tree_to_accesskit(&A11yNode) -> TreeUpdate` | Full (non-diff) conversion of an OxiUI a11y tree. |
+| `diff_a11y_trees(&A11yTree, &A11yTree) -> TreeUpdate` | Minimal diff between two tree states. |
+| `A11yEguiBridge` | Stateful bridge that retains the previous tree; `new()`, `update(&root) -> TreeUpdate` (full on the first frame, diff thereafter), `set_focus(Option<NodeId>) -> TreeUpdate`. |
+
+### Table bridge (`table` feature)
+
+Convenience wrappers around `oxiui-table`'s `Table::render_egui` / `EguiTableState`.
+
+| Item | Description |
+|------|-------------|
+| `render_sorted_table(&mut Table<S>, &mut Ui, &mut HeaderSortState, &mut EguiTableState) -> Vec<TableEvent>` | Renders the table and applies any `TableEvent::SortChanged` to `sort_state` automatically. |
+| `apply_selection_events(&[TableEvent], &mut SelectionModel) -> bool` | Applies `TableEvent::RowSelected` events to a selection model; returns `true` if selection changed. |
+
 ## Feature Flags
 
-This crate exposes no Cargo features; `default` is empty.
+`default` is empty — both features below are opt-in.
+
+| Feature | Pulls in | Description |
+|---------|----------|-------------|
+| `table` | `oxiui-table` (`egui-table` feature) | Enables the [`table_bridge`](#table-bridge-table-feature) module: `render_sorted_table`, `apply_selection_events`. |
+| `a11y` | `oxiui-accessibility`, `accesskit` | Enables the [`a11y`](#accessibility-bridge-a11y-feature) module: bridges an OxiUI `A11yTree` into `accesskit::TreeUpdate`s for egui's built-in AccessKit integration. |
 
 ## Errors
 
@@ -136,11 +168,12 @@ Functions that can fail return [`oxiui_core::UiError`]. Font-loading helpers use
 
 ## Adapter Notes and Deviations
 
-The adapter is faithful to egui 0.34's API; a few mappings are approximate and documented inline:
+The adapter is faithful to egui 0.35's API; a few mappings are approximate and documented inline:
 
 - `Key::Character` / `Key::Named` are forwarded via `egui::Key::from_name`; unrecognised names fall back to `egui::Key::F12`.
-- `rich_text` honours span colour, size, and italics; `egui` 0.34's `TextFormat` has no per-span bold field, so bold spans render at the default weight.
+- `rich_text` honours span colour, size, and italics; `egui` 0.35's `TextFormat` has no per-span bold field, so bold spans render at the default weight.
 - `Palette` carries no error/warning/success colours (those live on `oxiui_theme::ExtendedPalette`), so egui's `warn_fg_color` / `error_fg_color` keep their defaults.
+- **IME preedit cursor.** egui 0.35's `ImeEvent::Preedit` gained an `active_range_chars: Option<Range<usize>>` field. `forward_event_to_egui` converts `UiEvent::ImePreedit`'s byte-offset `cursor` range into that char-offset range (the same conversion `egui-winit` applies to raw OS IME events), using `str::get` so a range landing off a UTF-8 char boundary degrades to `None` instead of panicking. On egui ≤ 0.34 there was nowhere to put this — `ImeEvent::Preedit` was a bare `String` — so the cursor position was always dropped; it is now forwarded.
 
 ## Related Crates
 
@@ -148,7 +181,6 @@ The adapter is faithful to egui 0.34's API; a few mappings are approximate and d
 - [`oxiui-core`](../oxiui-core) — `UiCtx`, `Widget`, `Palette`, `UiEvent`, `UiError`, response types.
 - [`oxiui-theme`](../oxiui-theme) — `DesignTokens`, `TypographyScale`, theming primitives.
 - [`oxiui-text`](../oxiui-text) — font validation used by the font loaders.
-- [`oxiui-render-wgpu`](../oxiui-render-wgpu) — the wgpu render path eframe uses by default.
 - [`oxiui-iced`](../oxiui-iced) — the alternative iced framework adapter.
 
 ## License

@@ -58,6 +58,16 @@ deny = [
   { name = "flate2" },
   { name = "brotli" },
   { name = "miniz_oxide" },
+  # Compression must use oxiarc (completing the group)
+  { name = "zip" },
+  { name = "zstd" },
+  { name = "bzip2" },
+  { name = "lz4" },
+  { name = "tar" },
+  { name = "snap" },
+  # Serialization / FFT must use the COOLJAPAN equivalents already in use here
+  { name = "bincode" },   # replaced by oxicode
+  { name = "rustfft" },   # replaced by oxifft
 ]
 
 [sources]

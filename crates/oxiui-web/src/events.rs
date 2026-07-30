@@ -253,7 +253,6 @@ pub fn touch_end_to_mouse_up(touch: TouchPoint) -> UiEvent {
 /// # Errors
 ///
 /// Returns `Err` with a description string if any DOM binding fails.
-#[allow(unused_variables)]
 pub fn bind_events<F>(canvas_id: &str, on_event: F) -> Result<(), String>
 where
     F: Fn(UiEvent) + 'static,
@@ -467,6 +466,7 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (canvas_id, on_event);
         Ok(())
     }
 }

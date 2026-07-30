@@ -19,7 +19,6 @@
 /// # Errors
 ///
 /// Returns `Err` if clipboard access is denied by the browser.
-#[allow(unused_variables)]
 pub fn write_to_clipboard(text: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -39,6 +38,7 @@ pub fn write_to_clipboard(text: &str) -> Result<(), String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = text;
         Ok(())
     }
 }
@@ -54,7 +54,6 @@ pub fn write_to_clipboard(text: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns `Err` if the DOM operations fail.
-#[allow(unused_variables)]
 pub fn write_to_clipboard_exec_command(text: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -108,6 +107,7 @@ pub fn write_to_clipboard_exec_command(text: &str) -> Result<(), String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = text;
         Ok(())
     }
 }
@@ -133,7 +133,6 @@ pub type ClipboardReadCallback = Box<dyn FnOnce(Result<String, String>) + 'stati
 /// The Clipboard read API requires user permission or a user gesture in
 /// modern browsers.  `readText()` may reject in contexts where permission has
 /// not been granted.
-#[allow(unused_variables)]
 pub fn read_from_clipboard(callback: ClipboardReadCallback) {
     #[cfg(target_arch = "wasm32")]
     {

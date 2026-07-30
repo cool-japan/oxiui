@@ -11,14 +11,14 @@ The crate is built around a clip-correct [`Canvas`] that replays draw commands t
 
 ```toml
 [dependencies]
-oxiui-render-soft = "0.1.3"
+oxiui-render-soft = "0.2.1"
 ```
 
 To build the GPU-free audit configuration explicitly, disable default features:
 
 ```toml
 [dependencies]
-oxiui-render-soft = { version = "0.1.3", default-features = false }
+oxiui-render-soft = { version = "0.2.1", default-features = false }
 ```
 
 ## Quick Start
@@ -150,9 +150,11 @@ Glyph blitting helper: `blit_glyph_bitmap(fb, x, y, w, h, pixels, color)` (re-ex
 
 | Item | Description |
 |------|-------------|
-| `fill_polygon` | Active-Edge-Table scanline fill with vertical-supersample coverage AA |
+| `fill_polygon` | Active-Edge-Table scanline fill with vertical-supersample coverage AA; row and span ranges are clamped to the framebuffer's own dimensions, so out-of-range vertex coordinates cannot force unbounded loop iteration |
+| `fill_polygon_clipped` | Same as `fill_polygon`, additionally clipped to a `ClipRect` |
 | `fill_triangle` | Triangle fill convenience |
 | `FillRule` | Winding rule: even-odd / non-zero |
+| `Rasterizer` / `RasterizerScratch` | Reusable scratch-buffer rasterizer (`fill_polygon`/`fill_polygon_clipped` methods) that avoids per-polygon heap allocation in tight loops |
 
 ### `path` module
 
@@ -176,7 +178,7 @@ Glyph blitting helper: `blit_glyph_bitmap(fb, x, y, w, h, pixels, color)` (re-ex
 |------|-------------|
 | `BlendMode` | Extended blend modes: multiply / screen / overlay / darken / lighten |
 | `RgbaUnit` | Premultiplied-alpha unit helper |
-| `blend_mode` / `blend_pixel` / `composite_into` | Blend / composite functions |
+| `blend_mode` / `blend_pixel` / `composite_into` | Blend / composite functions. `composite_into`'s bounds-check guard computes `w * h * 4` with checked `usize` arithmetic (rather than raw `u32` math) so an oversized caller-supplied `w`/`h` is rejected outright instead of silently wrapping past the real buffer length |
 
 ### `shadow` module
 
@@ -184,7 +186,50 @@ Glyph blitting helper: `blit_glyph_bitmap(fb, x, y, w, h, pixels, color)` (re-ex
 |------|-------------|
 | `box_shadow` | Box shadow via separable 1-D Gaussian blur |
 | `gaussian_blur_alpha` | Alpha-channel Gaussian blur |
+| `gaussian_kernel(blur_radius)` | Build a half-width 1-D Gaussian kernel for a given blur radius |
 | `GaussianCache` | Cache of precomputed Gaussian kernels |
+
+### `fft_blur` module (`fft-blur` feature)
+
+FFT-accelerated alternative to `shadow::gaussian_blur_alpha` for large blur kernels (radius ≥ 32px), using `oxifft::convolve_mode`.
+
+| Item | Description |
+|------|-------------|
+| `gaussian_blur_alpha_fft(alpha, w, h, kernel)` | Separable Gaussian blur via FFT convolution when `fft-blur` is enabled; when the feature is **off**, this same function forwards to `shadow::gaussian_blur_alpha` (direct convolution) so callers always get a real blur — the feature only changes performance, never behaviour |
+| `should_use_fft_blur(blur_radius) -> bool` | `true` once `blur_radius >= FFT_BLUR_MIN_RADIUS` |
+| `FFT_BLUR_MIN_RADIUS` | Threshold (`32.0`) above which FFT convolution outperforms direct convolution |
+
+### `simd_fill` module
+
+Pure-Rust SIMD (`wide` crate) bulk pixel operations behind the `simd` feature; every function also has a scalar fallback compiled in, so call sites never need to feature-gate.
+
+| Item | Description |
+|------|-------------|
+| `fill_solid(pixels, color)` | 8-lane SIMD solid fill over a `&mut [u32]` buffer |
+| `alpha_blend_row(src, dst)` | Premultiplied source-over alpha blend of one pixel row |
+| `gradient_row_horizontal(..)` | 8-lane interpolated horizontal gradient row fill |
+
+### `backend_switch` module (`wgpu-compat` feature)
+
+Runtime CPU/GPU backend switching over the shared `DrawList` format.
+
+| Item | Description |
+|------|-------------|
+| `DynBackend` | Enum wrapping either `SoftBackend` or `oxiui-render-wgpu`'s `WgpuBackend`, implementing `RenderBackend` |
+| `DynBackend::soft(w, h)` / `DynBackend::wgpu(backend)` | Construct from either backend |
+| `kind()` / `is_soft()` / `is_wgpu()` | Inspect which backend is active |
+| `as_soft()` / `as_soft_mut()` | Borrow the inner `SoftBackend` when active |
+| `BackendKind` | Discriminant enum (`Soft`, `Wgpu`) |
+
+### `canvas_upload` module (`canvas-2d` feature)
+
+Canvas 2D pixel upload path for wasm32 targets; native builds get no-op stubs that always return `Ok(())`.
+
+| Item | Description |
+|------|-------------|
+| `upload_framebuffer(fb, canvas_id)` | Upload a `Framebuffer` to an HTML canvas via `putImageData` (wasm32) |
+| `upload_rgba(data, w, h, canvas_id)` | Upload a raw RGBA byte buffer to an HTML canvas |
+| `framebuffer_to_rgba8(fb) -> Vec<u8>` | Convert a `Framebuffer` to a flat RGBA8 byte buffer |
 
 ### `dither` module
 
@@ -214,6 +259,10 @@ When the `theme` feature is active, [`oxiui_theme::ShadowSpec`] is re-exported a
 | `text` | yes | Enable glyph shaping / rasterization via `oxiui-text`; `DrawText` commands are rendered instead of skipped |
 | `theme` | no | Enable `oxiui-theme` integration (`apply_shadow_spec`, `ShadowSpec` re-export) |
 | `parallel` | no | Enable the `rayon`-backed parallel tile driver (`render_parallel`) |
+| `simd` | no | Enable `wide`-backed 8-lane SIMD paths in the `simd_fill` module (`fill_solid`, `alpha_blend_row`, `gradient_row_horizontal`); scalar fallbacks are always compiled in |
+| `fft-blur` | no | Route large-kernel (`blur_radius >= 32px`) Gaussian blur through `oxifft::convolve_mode` instead of direct convolution; without it, `gaussian_blur_alpha_fft` still blurs correctly by forwarding to the direct-convolution path — the feature only changes performance, never correctness |
+| `wgpu-compat` | no | Enable the `backend_switch` module's `DynBackend` enum for runtime switching between `SoftBackend` and `oxiui-render-wgpu`'s `WgpuBackend` |
+| `canvas-2d` | no | Enable the `canvas_upload` module's wasm32 Canvas-2D `putImageData` pixel upload path (native builds get no-op stubs) |
 
 Disable default features (`default-features = false`) for the GPU- and text-pipeline-free audit build.
 

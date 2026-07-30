@@ -3,15 +3,45 @@
 //! This module provides the `OxiIcedState` struct that threads the user's
 //! content closure, lifecycle hooks, and plugins through iced's retained-mode
 //! `update`/`view` event loop.  The `run` function boots the iced application.
+//!
+//! ## Lifecycle wiring
+//! Widget interaction and window lifecycle share a single iced message type,
+//! [`AppMessage`]. Widget messages flow through `apply_message` unchanged;
+//! lifecycle messages ([`LifecycleMsg`]) come from an
+//! [`iced::event::listen_with`] subscription and drive the `on_resize` /
+//! `on_focus` / `on_close` hooks. Close is handled by the app (rather than iced)
+//! so the hooks run before the window is destroyed: the application is booted
+//! with `exit_on_close_request(false)` and issues `iced::window::close` itself.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-use iced::Element;
-use iced::Task;
+use iced::{Element, Subscription, Task};
 use oxiui_iced::{apply_message, IcedConfig, IcedUiCtx, Message, WidgetState};
 
+use crate::null_ctx::NullUiCtx;
+use crate::runner::{LifecycleEvent, LifecycleSnapshot, LifecycleTracker};
 use crate::{ContentFn, HookFn, Plugin};
+
+/// Combined iced message: widget interactions plus window lifecycle events.
+#[derive(Debug, Clone)]
+pub enum AppMessage {
+    /// A widget-level message produced by the `IcedUiCtx` bridge.
+    Widget(Message),
+    /// A window lifecycle event captured by the subscription.
+    Lifecycle(LifecycleMsg),
+}
+
+/// Window lifecycle messages captured from the iced event stream.
+#[derive(Debug, Clone)]
+pub enum LifecycleMsg {
+    /// The window was resized to `(width, height)` logical pixels.
+    Resized(f32, f32),
+    /// The window gained (`true`) or lost (`false`) focus.
+    Focus(bool),
+    /// The user requested the window (`id`) be closed.
+    Close(iced::window::Id),
+}
 
 /// Application state threaded through iced's `update`/`view` loop.
 ///
@@ -34,6 +64,14 @@ pub struct OxiIcedState {
     pub plugins: RefCell<Vec<Box<dyn Plugin>>>,
     /// Whether the init phase has been completed.
     pub initialised: Cell<bool>,
+    /// Hooks fired once when the window is closing.
+    pub on_close: RefCell<Vec<HookFn>>,
+    /// Hooks fired when the window size changes.
+    pub on_resize: RefCell<Vec<HookFn>>,
+    /// Hooks fired when the window focus state flips.
+    pub on_focus: RefCell<Vec<HookFn>>,
+    /// Deduplicates raw size / focus / close snapshots into fired events.
+    pub tracker: RefCell<LifecycleTracker>,
 }
 
 impl OxiIcedState {
@@ -48,16 +86,72 @@ impl OxiIcedState {
             on_frame: RefCell::new(Vec::new()),
             plugins: RefCell::new(Vec::new()),
             initialised: Cell::new(false),
+            on_close: RefCell::new(Vec::new()),
+            on_resize: RefCell::new(Vec::new()),
+            on_focus: RefCell::new(Vec::new()),
+            tracker: RefCell::new(LifecycleTracker::default()),
+        }
+    }
+
+    /// Fire the given hook vector against a no-op [`UiCtx`].
+    fn fire(&self, hooks: &RefCell<Vec<HookFn>>) {
+        let mut null = NullUiCtx;
+        if let Ok(mut hooks) = hooks.try_borrow_mut() {
+            for hook in hooks.iter_mut() {
+                hook(&mut null);
+            }
         }
     }
 }
 
-/// iced update function — advances widget state and click tracking.
-pub fn update(state: &mut OxiIcedState, msg: Message) -> Task<Message> {
-    let mut clicks = state.pending_clicks.borrow_mut();
-    let mut widget_state = state.widget_state.borrow_mut();
-    apply_message(&mut widget_state, &mut clicks, &msg);
-    Task::none()
+/// iced update function — advances widget state, click tracking, and lifecycle.
+pub fn update(state: &mut OxiIcedState, msg: AppMessage) -> Task<AppMessage> {
+    match msg {
+        AppMessage::Widget(m) => {
+            let mut clicks = state.pending_clicks.borrow_mut();
+            let mut widget_state = state.widget_state.borrow_mut();
+            apply_message(&mut widget_state, &mut clicks, &m);
+            Task::none()
+        }
+        AppMessage::Lifecycle(LifecycleMsg::Resized(w, h)) => {
+            let events = state.tracker.borrow_mut().observe(LifecycleSnapshot {
+                size: Some((w, h)),
+                focused: None,
+                close_requested: false,
+            });
+            if events
+                .iter()
+                .any(|e| matches!(e, LifecycleEvent::Resized(..)))
+            {
+                state.fire(&state.on_resize);
+            }
+            Task::none()
+        }
+        AppMessage::Lifecycle(LifecycleMsg::Focus(f)) => {
+            let events = state.tracker.borrow_mut().observe(LifecycleSnapshot {
+                size: None,
+                focused: Some(f),
+                close_requested: false,
+            });
+            if events.iter().any(|e| matches!(e, LifecycleEvent::Focus(_))) {
+                state.fire(&state.on_focus);
+            }
+            Task::none()
+        }
+        AppMessage::Lifecycle(LifecycleMsg::Close(id)) => {
+            let events = state.tracker.borrow_mut().observe(LifecycleSnapshot {
+                size: None,
+                focused: None,
+                close_requested: true,
+            });
+            if events.iter().any(|e| matches!(e, LifecycleEvent::Close)) {
+                state.fire(&state.on_close);
+            }
+            // We disabled `exit_on_close_request`, so close the window ourselves
+            // now that the on_close hooks have run.
+            iced::window::close(id)
+        }
+    }
 }
 
 /// iced view function — drives the content closure through `IcedUiCtx`.
@@ -65,7 +159,7 @@ pub fn update(state: &mut OxiIcedState, msg: Message) -> Task<Message> {
 /// Also fires init hooks + plugin init on the first frame, and on_frame
 /// hooks + plugin update every frame. This mirrors the pattern used by
 /// `OxiEguiApp::ui()` (egui path).
-pub fn view<'a>(state: &'a OxiIcedState) -> Element<'a, Message> {
+pub fn view(state: &OxiIcedState) -> Element<'_, AppMessage> {
     // Drain pending clicks for this frame.
     let clicks = {
         let mut guard = state.pending_clicks.borrow_mut();
@@ -117,12 +211,42 @@ pub fn view<'a>(state: &'a OxiIcedState) -> Element<'a, Message> {
         }
     }
 
-    // `into_iced_element()` returns `Element<'static, Message>`.
-    // `'static: 'a` by subtyping, so the coercion is valid.
+    // `into_iced_element()` returns `Element<'static, Message>`; tag every
+    // widget message as `AppMessage::Widget` so lifecycle messages can coexist.
     let elem: Element<'static, Message> = ctx.into_iced_element();
-    // Cast the lifetime from 'static to 'a (safe: 'static is longer).
-    // SAFETY: all widget content is owned strings; no borrowed data from state.
-    elem
+    elem.map(AppMessage::Widget)
+}
+
+/// Map raw iced events to lifecycle messages, discarding everything else.
+///
+/// `listen_with` takes a plain `fn` pointer (no captured state), so this is a
+/// free function. Returning `None` drops the event.
+fn lifecycle_filter(
+    event: iced::Event,
+    _status: iced::event::Status,
+    id: iced::window::Id,
+) -> Option<AppMessage> {
+    use iced::window::Event as WindowEvent;
+    match event {
+        iced::Event::Window(WindowEvent::Resized(size)) => Some(AppMessage::Lifecycle(
+            LifecycleMsg::Resized(size.width, size.height),
+        )),
+        iced::Event::Window(WindowEvent::Focused) => {
+            Some(AppMessage::Lifecycle(LifecycleMsg::Focus(true)))
+        }
+        iced::Event::Window(WindowEvent::Unfocused) => {
+            Some(AppMessage::Lifecycle(LifecycleMsg::Focus(false)))
+        }
+        iced::Event::Window(WindowEvent::CloseRequested) => {
+            Some(AppMessage::Lifecycle(LifecycleMsg::Close(id)))
+        }
+        _ => None,
+    }
+}
+
+/// Lifecycle subscription: window resize / focus / close events.
+fn subscription(_state: &OxiIcedState) -> Subscription<AppMessage> {
+    iced::event::listen_with(lifecycle_filter)
 }
 
 /// Run the iced application with the given state and theme.
@@ -139,11 +263,14 @@ pub fn run(state: OxiIcedState, iced_theme: iced::Theme, width: f32, height: f32
 
     let title_fn = move |s: &OxiIcedState| s.title.clone();
     let theme_fn = move |_: &OxiIcedState| iced_theme.clone();
-    let _ = width;
-    let _ = height;
 
     iced::application(boot, update, view)
         .title(title_fn)
         .theme(theme_fn)
+        .subscription(subscription)
+        // We fire on_close hooks ourselves, then close the window explicitly.
+        .exit_on_close_request(false)
+        // Honour the configured initial window size (previously ignored).
+        .window_size(iced::Size::new(width, height))
         .run()
 }

@@ -22,7 +22,7 @@ Material dark/light), a hand-written CSS-subset `StyleSheet` parser with
 specificity cascade, CSS `inheritance::resolve` for inheritable/non-inheritable
 properties, `Breakpoint` (xs/sm/md/lg/xl/xxl) responsive thresholds, and
 `IconSet` + `BuiltinIcons` with hand-authored SVG path-data for 8 icons ×
-4 sizes × 3 variants. 115 tests, 0 warnings.
+4 sizes × 3 variants. 156 tests, 0 warnings.
 
 ## Core Implementation
 - [x] High-contrast COOLJAPAN palette: WCAG AAA compliant (contrast ratio > 7.0 on all text/background pairs), `cooljapan_high_contrast()` constructor, both dark-HC and light-HC variants (~80 SLOC)
