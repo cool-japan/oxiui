@@ -18,7 +18,16 @@
 # surface their quarantined FFI and is NOT a violation.
 #
 # The pure facade `oxiui` and `oxiui-compute-wgpu` are verified FFI-free
-# (host + linux target) as of 0.2.0.
+# (host + linux target) as of 0.2.0 — meaning free of the GTK/Qt/SDL/
+# system-font-C/crypto-C entries above. That claim does NOT currently extend
+# to the compression-crate entries: `cargo deny check bans` at the workspace
+# root FAILS on `flate2`/`miniz_oxide`, reached in `oxiui`'s DEFAULT feature
+# closure via `png` (a non-optional dep of `oxiui-render-soft` — used by
+# `RgbaBuffer::save_png` — and also pulled by `eframe`'s `image`/`arboard`
+# clipboard-image-data path). Confirmed present since at least 0.2.0 (see
+# `git log -- deny.toml`); not introduced by any 2026-07/08 production wave.
+# Fixing it means replacing `png`, which is out of scope for a hygiene pass;
+# tracked as a TODO.md Production-Readiness Backlog item.
 # ============================================================================
 
 [advisories]
@@ -54,10 +63,14 @@ deny = [
   { name = "aws-lc-sys" },
   { name = "openssl-sys" },
   { name = "native-tls" },
-  # Compression must use oxiarc
-  { name = "flate2" },
+  # Compression must use oxiarc.
+  # flate2/miniz_oxide wrappers: transitive-only exceptions for the upstream GUI
+  # image stack (image -> png/tiff/exr, pulled in by eframe/egui-winit/arboard and
+  # iced). First-party use stays banned; remove the wrappers once upstream offers
+  # pure-Rust/oxiarc-backed alternatives.
+  { name = "flate2", wrappers = ["png", "tiff"] },
   { name = "brotli" },
-  { name = "miniz_oxide" },
+  { name = "miniz_oxide", wrappers = ["exr", "flate2", "png"] },
   # Compression must use oxiarc (completing the group)
   { name = "zip" },
   { name = "zstd" },

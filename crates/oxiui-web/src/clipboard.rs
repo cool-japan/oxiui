@@ -98,7 +98,11 @@ pub fn write_to_clipboard_exec_command(text: &str) -> Result<(), String> {
         if let Some(input) = textarea_as_el.dyn_ref::<web_sys::HtmlInputElement>() {
             input.select();
         }
-        let _ = document.exec_command("copy");
+        // `execCommand` lives on `HtmlDocument` in web-sys 0.3, not the base
+        // `Document`; cast before invoking the (deprecated) copy fallback.
+        if let Some(html_document) = document.dyn_ref::<web_sys::HtmlDocument>() {
+            let _ = html_document.exec_command("copy");
+        }
 
         body.remove_child(&textarea)
             .map_err(|_| "write_to_clipboard_exec_command: remove_child failed".to_string())?;

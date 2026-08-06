@@ -107,7 +107,7 @@ impl eframe::App for WasmApp {
         // will schedule the next frame immediately (no explicit call needed here).
 
         // Minimal content: a centred OxiUI identity label.
-        egui::CentralPanel::default().show_inside(ui, |panel_ui| {
+        egui::CentralPanel::default().show(ui, |panel_ui| {
             panel_ui.centered_and_justified(|cj| {
                 cj.label("OxiUI WASM");
             });

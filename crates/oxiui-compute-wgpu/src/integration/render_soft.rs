@@ -166,7 +166,12 @@ fn main_blur_v(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// GPU-accelerated separable Gaussian blur on an RGBA pixel buffer.
 ///
 /// Executes two compute passes (horizontal then vertical) on the GPU.
-/// Falls back to a CPU implementation when `ctx` is `None`.
+/// Falls back to a CPU implementation when `ctx` is `None`, and *also* falls
+/// back to the CPU implementation if the GPU path fails at runtime (device
+/// lost, out-of-memory, mapping failure) rather than panicking — `pixels` is
+/// never written to until both passes and the final readback have all
+/// succeeded, so it is always safe to still hold the original input at
+/// fallback time.
 ///
 /// # Parameters
 /// - `ctx`    — optional GPU context; `None` selects the CPU path.
@@ -202,32 +207,38 @@ pub fn gpu_gaussian_blur_rgba(
     let tmp_buf = storage_buffer_init(device, "blur-tmp", bytemuck::cast_slice(&vec![0u32; n]));
     let param_buf = crate::buffer::uniform_buffer(device, "blur-params", &param_bytes);
 
-    // Horizontal pass: src → tmp
-    run_blur_pass(BlurPassArgs {
-        device,
-        queue,
-        shader: SHADER_BLUR_HORIZONTAL,
-        entry: "main_blur_h",
-        src: &src_buf,
-        dst: &tmp_buf,
-        params: &param_buf,
-        n: n as u32,
-    });
+    let gpu_result: Result<Vec<u32>, crate::ComputeError> = (|| {
+        // Horizontal pass: src → tmp
+        run_blur_pass(BlurPassArgs {
+            device,
+            queue,
+            shader: SHADER_BLUR_HORIZONTAL,
+            entry: "main_blur_h",
+            src: &src_buf,
+            dst: &tmp_buf,
+            params: &param_buf,
+            n: n as u32,
+        })?;
 
-    // Vertical pass: tmp → dst
-    run_blur_pass(BlurPassArgs {
-        device,
-        queue,
-        shader: SHADER_BLUR_VERTICAL,
-        entry: "main_blur_v",
-        src: &tmp_buf,
-        dst: &dst_buf,
-        params: &param_buf,
-        n: n as u32,
-    });
+        // Vertical pass: tmp → dst
+        run_blur_pass(BlurPassArgs {
+            device,
+            queue,
+            shader: SHADER_BLUR_VERTICAL,
+            entry: "main_blur_v",
+            src: &tmp_buf,
+            dst: &dst_buf,
+            params: &param_buf,
+            n: n as u32,
+        })?;
 
-    let result: Vec<u32> = read_back(device, queue, &dst_buf, n);
-    pixels.copy_from_slice(&result);
+        read_back(device, queue, &dst_buf, n)
+    })();
+
+    match gpu_result {
+        Ok(result) => pixels[..n].copy_from_slice(&result),
+        Err(_) => cpu_gaussian_blur_rgba(pixels, width, height, radius),
+    }
 }
 
 /// Arguments for a single blur compute pass.
@@ -243,7 +254,11 @@ struct BlurPassArgs<'a> {
 }
 
 /// Encode and submit a single blur pass.
-fn run_blur_pass(args: BlurPassArgs<'_>) {
+///
+/// # Errors
+/// Returns [`crate::ComputeError::Operation`] if the device poll (which waits
+/// for this pass's dispatch to complete) fails.
+fn run_blur_pass(args: BlurPassArgs<'_>) -> Result<(), crate::ComputeError> {
     let BlurPassArgs {
         device,
         queue,
@@ -288,7 +303,11 @@ fn run_blur_pass(args: BlurPassArgs<'_>) {
     queue.submit(std::iter::once(enc.finish()));
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("blur pass poll failed");
+        .map_err(|e| crate::ComputeError::Operation {
+            op: "gpu_gaussian_blur_rgba",
+            detail: e.to_string(),
+        })?;
+    Ok(())
 }
 
 /// Build the 16-byte `BlurParams` uniform.
@@ -405,7 +424,10 @@ fn main_dither(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// GPU-accelerated ordered (Bayer) dithering on an RGBA pixel buffer.
 ///
 /// Applies a 4×4 Bayer matrix dithering in parallel on the GPU.  Falls back
-/// to a CPU implementation when `ctx` is `None`.
+/// to a CPU implementation when `ctx` is `None`, and *also* falls back if the
+/// GPU readback fails at runtime (device lost, out-of-memory, mapping
+/// failure) — `pixels` is not written to until the readback succeeds, so it
+/// is always safe to still hold the original input at fallback time.
 ///
 /// # Parameters
 /// - `ctx`    — optional GPU context.
@@ -466,8 +488,10 @@ pub fn gpu_ordered_dither_rgba(
     }
     queue.submit(std::iter::once(enc.finish()));
 
-    let result: Vec<u32> = read_back(device, queue, &buf, n);
-    pixels.copy_from_slice(&result);
+    match read_back::<u32>(device, queue, &buf, n) {
+        Ok(result) => pixels[..n].copy_from_slice(&result),
+        Err(_) => cpu_ordered_dither_rgba(pixels, width),
+    }
 }
 
 /// Pure-CPU fallback for ordered dithering.
@@ -560,7 +584,10 @@ pub enum GradientAxis {
 ///
 /// Writes each pixel of `pixels` with a linearly interpolated colour from
 /// `color0` to `color1` along `axis`.  Falls back to a CPU implementation
-/// when `ctx` is `None`.
+/// when `ctx` is `None`, and *also* falls back if the GPU readback fails at
+/// runtime (device lost, out-of-memory, mapping failure) — `pixels` is not
+/// written to until the readback succeeds, so it is always safe to still
+/// hold the original (pre-fill) content at fallback time.
 ///
 /// # Parameters
 /// - `ctx`    — optional GPU context.
@@ -651,8 +678,10 @@ pub fn gpu_linear_gradient_fill(
     }
     queue.submit(std::iter::once(enc.finish()));
 
-    let result: Vec<u32> = read_back(device, queue, &pixel_buf, n);
-    pixels[..n].copy_from_slice(&result);
+    match read_back::<u32>(device, queue, &pixel_buf, n) {
+        Ok(result) => pixels[..n].copy_from_slice(&result),
+        Err(_) => cpu_linear_gradient_fill(pixels, width, height, color0, color1, axis),
+    }
 }
 
 /// Pure-CPU fallback for linear gradient fill.

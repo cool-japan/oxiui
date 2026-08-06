@@ -845,7 +845,8 @@ mod tests {
         ctx.queue.submit(std::iter::once(encoder.finish()));
 
         // Read back results.
-        let result: Vec<f32> = crate::buffer::read_back(&ctx.device, &ctx.queue, &buf, input.len());
+        let result: Vec<f32> =
+            crate::buffer::read_back(&ctx.device, &ctx.queue, &buf, input.len()).unwrap();
 
         // Compare with CPU reference.
         assert_eq!(
@@ -918,7 +919,8 @@ mod tests {
         ctx.queue.submit(std::iter::once(encoder.finish()));
 
         // Read back the single output value.
-        let result: Vec<f32> = crate::buffer::read_back(&ctx.device, &ctx.queue, &output_buf, 1);
+        let result: Vec<f32> =
+            crate::buffer::read_back(&ctx.device, &ctx.queue, &output_buf, 1).unwrap();
         let got = result[0];
 
         assert!(

@@ -7,7 +7,7 @@
 
 Slint ships a Pure-Rust CPU renderer (`renderer-software`), so the adapter introduces **no GTK/Qt/C++ system widgets**. The crate itself is Apache-2.0 and is fully usable with `default = []` (collection mode), but enabling the `slint` feature transitively pulls in the `slint` crate, which is licensed under **GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0**. Downstream consumers must ensure their project's license is compatible with one of those three Slint options. Slint is only compiled when you explicitly request `--features slint`.
 
-> **Milestone status:** As of M5, [`run_slint`] executes the content closure in headless collection mode (no display required) and returns `Ok(())`, even when the `slint` feature is enabled. Opening a native window via `slint::run_event_loop()` is deferred to M6 — see the notes below.
+> **Milestone status:** Native slint window rendering (`slint::run_event_loop()`) is not yet wired — it needs a live display (untestable in headless CI) and the `slint` dependency is GPL-gated and off by default. [`run_slint`] therefore returns a typed `UiError::Unsupported` rather than a fake success, so callers can distinguish "no window opened" from `Ok`. For headless widget collection, construct a [`SlintCtx`] directly (fully supported, no display required).
 
 ## Installation
 
@@ -38,18 +38,20 @@ assert_eq!(ctx.items[0], "heading:My Window");
 assert!(!resp.clicked);
 ```
 
-### Driving a content closure with a theme
+### Headless widget collection (supported today)
 
-```rust,ignore
-use oxiui_slint::run_slint;
-use oxiui_theme::cooljapan_dark;
+```rust
+use oxiui_core::UiCtx;
+use oxiui_slint::SlintCtx;
 
-run_slint(&*cooljapan_dark(), |ui| {
-    ui.heading("Hello from Slint");
-    ui.label("OxiUI + slint backend");
-})
-.expect("slint run failed");
+let mut ctx = SlintCtx::default();
+ctx.heading("Hello from Slint");
+ctx.label("OxiUI + slint backend");
+assert_eq!(ctx.items.len(), 2);
 ```
+
+`run_slint` currently returns `UiError::Unsupported` (the native window path is not
+yet wired); use `SlintCtx` directly for headless collection.
 
 ## API Overview
 
@@ -63,7 +65,7 @@ run_slint(&*cooljapan_dark(), |ui| {
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| [`run_slint`] | `run_slint<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>` where `F: FnOnce(&mut dyn UiCtx)` | Runs one Slint-backed UI frame. Executes `content` against a `SlintCtx` in collection mode. Returns `Ok(())` in M5. |
+| [`run_slint`] | `run_slint<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>` where `F: FnOnce(&mut dyn UiCtx)` | Contracted to open a native Slint window. That path is not yet wired, so it currently returns `UiError::Unsupported`. Use `SlintCtx` directly for headless collection. |
 
 ### `SlintCtx` as a `UiCtx`
 
@@ -85,7 +87,7 @@ The `items` entries use the format `"<kind>:<text>"` (e.g. `"label:Hello"`, `"bu
 
 ## Errors
 
-[`run_slint`] returns `Result<(), oxiui_core::UiError>`. In M5 it is always `Ok(())`. From M6 onward it will return [`UiError::Backend`] if Slint's event loop reports an error. `UiError` is `#[non_exhaustive]`; see [`oxiui-core`](../oxiui-core) for the full variant list.
+[`run_slint`] returns `Result<(), oxiui_core::UiError>`. It currently always returns [`UiError::Unsupported`] because the native Slint window path is not yet wired. Once the event loop lands it will return `Ok(())` on a clean window close, or [`UiError::Backend`] if Slint's event loop reports an error. `UiError` is `#[non_exhaustive]`; see [`oxiui-core`](../oxiui-core) for the full variant list.
 
 ## Palette mapping note
 

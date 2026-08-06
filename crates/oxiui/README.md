@@ -121,14 +121,15 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | `.register_command(name, shortcut)` | Add a command to the palette. |
 | `.command_matches(query) -> Vec<String>` | Fuzzy-search command labels (subsequence match). |
 | `.with_design_tokens(tokens)` / `.with_typography(scale)` / `.design_tokens()` / `.typography()` | Set/read `oxiui_theme::DesignTokens` / `TypographyScale` beyond the theme's `Palette`, for backends and layout engines that need the spacing scale at frame time. |
-| `.open_window(WindowConfig) -> WindowId` / `.close_window(id)` / `.secondary_windows()` / `.window_channel()` | Multi-window registry (`oxiui::multiwindow`). Descriptors are queued for backends to open as OS windows (egui `show_viewport_deferred` / iced `multi_window` dispatch is planned for M7); `WindowChannel` carries cross-window messages today. |
-| `.menu_bar(F)` / `.with_menu_bar(MenuBar)` / `.get_menu_bar()` | Build or attach a cross-platform menu bar (`oxiui::menu`). Pure data model — backend translation (egui `egui-menu` / iced `widget::menu`) is planned for M7. |
+| `.open_window(WindowConfig) -> WindowId` / `.open_window_with(WindowConfig, F)` / `.close_window(id)` / `.secondary_windows()` / `.window_handle()` / `.window_channel()` | Multi-window registry (`oxiui::multiwindow`). `App::run()` moves the descriptors into a `ShellConfig`; the native egui backend opens one `show_viewport_deferred` viewport (a real OS window) per descriptor and drives its content closure each frame. `window_handle()` returns a cloneable `WindowHandle` for runtime `open` / `close` / `focus`. Backends that cannot open secondary windows (iced 0.14, dioxus, any runner that does not override `BackendRunner::set_shell`) make `run()` fail with `UiError::Unsupported` instead of ignoring them. `WindowChannel` carries cross-window messages. |
+| `.menu_bar(F)` / `.with_menu_bar(MenuBar)` / `.get_menu_bar()` | Build or attach a cross-platform menu bar (`oxiui::menu`). `App::run()` hands it to the backend, which draws it above the content every frame via `menu::render_menu_bar` (egui: top of the primary frame; iced: top of the primary view) and fires the item callback the user selects. |
 | `.file_dialog(...)` / `.file_save_dialog(...)` / `.message_dialog(...)` / `.confirm_dialog(...)` / `.prompt_dialog(...)` / `.poll_dialog(id)` / `.respond_dialog(id, resp)` / `.dialog_queue()` | Pure in-process dialog request/response queue (`oxiui::dialog::DialogQueue`) — headless-testable, no OS dialog. Needs no feature flag. |
 | `.file_dialog_native(...)` / `.message_dialog_native(...)` | Blocking native OS file-picker / message-box dialogs via `rfd` (requires `dialogs`; no-op fallback without it). |
 | `.soft_renderer() -> SoftRenderer` | Construct an off-screen `oxiui_render_soft::SoftRenderer` for custom rendering/compositing (requires `software`). |
 | `.notifications()` / `.hotkeys()` / `.extra_fonts()` | Read-only accessors for testing. |
 | `.run() -> Result<AppExit, UiError>` | Launch the native window + event loop (dispatches by backend). |
 | `.run_headless_once() -> Result<AppExit, UiError>` | Run one synthetic frame against a no-op `UiCtx` (no window; fires init/frame hooks + plugins, including `on_close` — so `.with_persistent_state` persists deterministically in headless runs too). |
+| `.run_headless_frame(&mut dyn UiCtx) -> usize` | Drive one full frame (menu bar → init → content → per-frame hooks) through a caller-supplied `UiCtx`; returns the number of menu actions dispatched. Display-free, for tests / CI harnesses. |
 | `.run_with_return(F) -> Result<T, UiError>` | Run `content` once headlessly and forward its return value. |
 | `.screenshot() -> Result<Vec<u8>, UiError>` | Render a headless frame to PNG bytes (requires `software`; else `UiError::Unsupported`). |
 | `.build_a11y_snapshot(window_id) -> A11yTree` | Record content through `RecordingUiCtx` into an accessibility tree (requires `a11y`). |
@@ -177,15 +178,16 @@ The egui-on-wasm32 path is not driven through `App::run` (which returns `UiError
 | `oxiui::table` | `table` | Glob re-export of `oxiui-table`. |
 | `oxiui::accessibility` | `a11y` | `A11yTree`, `A11yNode`, `WidgetRole`. |
 | `oxiui::recording` | `a11y` | `RecordingUiCtx`, `RecordingEntry`. |
-| `oxiui::multiwindow` | — | `WindowRegistry`, `SecondaryWindow`; backs `App::open_window`/`close_window`. |
+| `oxiui::multiwindow` | — | `WindowRegistry`, `SecondaryWindow`, `WindowHandle`, `WindowCommand`, `WindowSession`; backs `App::open_window`/`close_window`/`window_handle`. |
+| `oxiui::shell` | — | `ShellConfig` — the secondary windows + menu bar handed to the backend by `BackendRunner::set_shell`. |
 | `oxiui::dialog` | — | Pure in-process `DialogQueue`, `DialogKind`, `DialogResponse`, `DialogId`; backs `App::file_dialog` and friends. |
-| `oxiui::menu` | — | `MenuBar`, `MenuBarBuilder`, `Menu`, `MenuItem` — closure-based menu-bar DSL; backs `App::menu_bar`. |
+| `oxiui::menu` | — | `MenuBar`, `MenuBarBuilder`, `Menu`, `MenuItem`, `MenuBarState`, `render_menu_bar` — closure-based menu-bar DSL plus the backend-agnostic renderer; backs `App::menu_bar`. |
 | `oxiui::native_dialog` | `dialogs` | `open_file_dialog`, `save_file_dialog`, `message_dialog`, `confirm_dialog` — blocking `rfd`-backed native dialogs; backs `App::*_dialog_native`. |
 | `oxiui::logging` | `tracing` | `init_logging`, `LogLevel` — installs a `tracing-subscriber` fmt subscriber respecting `RUST_LOG`. |
 
 ### Crate-root re-exports
 
-From `oxiui-core` at the crate root: `ButtonResponse`, `Color`, `FontSpec`, `Palette`, `Theme`, `UiCtx`, `UiError`. From `runner`: `BackendRunner`, `LifecycleConfig` (always), plus `EguiRunner` (`egui`) and `IcedRunner` (`iced`). From `theme_picker`: `theme_by_name`, `theme_picker`, `BUILTIN_THEMES`. From `multiwindow`: `SecondaryWindow`. From `dialog`: `DialogId`, `DialogKind`, `DialogQueue`, `DialogResponse`. From `menu`: `Menu`, `MenuBar`, `MenuBarBuilder`, `MenuItem`. From `native_dialog`: `DialogResult`, `MessageLevel`.
+From `oxiui-core` at the crate root: `ButtonResponse`, `Color`, `FontSpec`, `Palette`, `Theme`, `UiCtx`, `UiError`. From `runner`: `BackendRunner`, `LifecycleConfig` (always), plus `EguiRunner` (`egui`) and `IcedRunner` (`iced`). From `theme_picker`: `theme_by_name`, `theme_picker`, `BUILTIN_THEMES`. From `multiwindow`: `SecondaryWindow`, `WindowCommand`, `WindowHandle`, `WindowSession`. From `shell`: `ShellConfig`. From `dialog`: `DialogId`, `DialogKind`, `DialogQueue`, `DialogResponse`. From `menu`: `Menu`, `MenuBar`, `MenuBarBuilder`, `MenuBarState`, `MenuItem`. From `native_dialog`: `DialogResult`, `MessageLevel`.
 
 ### Web (wasm32) entry point
 

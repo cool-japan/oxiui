@@ -7,6 +7,142 @@ OxiUI adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.2] - 2026-08-06
+
+### Added
+
+- **The facade's multi-window registry and menu bar are now consumed by the
+  backend layer** (they used to be stored and read by nobody, so
+  `App::open_window` and `App::menu_bar` were silent no-ops).
+  - New `oxiui::shell::ShellConfig` bundles the registered secondary windows,
+    their content closures, the menu bar and the runtime `WindowHandle`.
+    `App::run()` builds it and hands it to the backend through a new
+    **`BackendRunner::set_shell`** trait method whose default implementation
+    accepts an empty shell and returns `UiError::Unsupported` for a non-empty
+    one — a runner can no longer swallow a window or a menu bar in silence.
+  - New `oxiui::menu::render_menu_bar` + `MenuBarState` draw a `MenuBar`
+    through any `UiCtx`, track the open menu/submenu chain across frames, and
+    invoke the selected `MenuItem::Action`. The egui backend renders it above
+    the primary frame, iced above the primary view, and the headless /
+    accessibility paths (`run_headless_once`, `build_a11y_snapshot`) render it
+    too. Unsupported containers degrade (`menu_bar` → `horizontal` → inline,
+    `popup` → `vertical` → inline) rather than dropping the bar.
+  - The native egui backend opens one `egui::Context::show_viewport_deferred`
+    viewport (a real OS window) per registered secondary window, translating
+    `WindowConfig` into a `ViewportBuilder`, and tears it down when the user
+    closes it.
+  - New `App::open_window_with(config, F)` attaches a per-window content
+    closure; new `App::window_handle()` returns a cloneable, thread-safe
+    `WindowHandle` with `open` / `close` / `focus`, drained each frame into a
+    `WindowSession` state machine (typed `UiError::Window` for an unregistered
+    id or a focus request on a closed window).
+  - New `App::run_headless_frame(&mut dyn UiCtx) -> usize` drives one complete
+    frame (menu bar → init → content → per-frame hooks) through a
+    caller-supplied context and reports how many menu actions fired — the
+    display-free way to test the whole frame path.
+  - `IcedRunner::set_shell` accepts the menu bar but rejects secondary windows
+    with `UiError::Unsupported` (iced 0.14's `application` runtime is
+    single-window; `iced::daemon` would be required), and `Backend::Dioxus`
+    rejects any non-empty shell before `App::run()` does anything else.
+- **`oxiui_egui::EguiUiCtx::with_id_base` / `oxiui_iced::adapter::IcedUiCtx::with_id_base`**
+  (plus `IcedUiCtx::next_widget_id`) let two contexts drawing into the same
+  frame reserve disjoint widget-id ranges. Both backends use this to render the
+  menu bar in a reserved high range: the bar's widget count changes as its
+  drop-down opens and closes, and without the split every content widget id
+  would shift with it — silently rerouting iced clicks and invalidating egui's
+  persistent widget state (dropdown selection, popup position, grid widths).
+
+- **`fuzz/` cargo-fuzz harness** for `oxiui-render-soft`: `fuzz_fill_polygon` /
+  `fuzz_composite_into` (regression coverage generalizing the 0.2.1 Security
+  fixes below to arbitrary finite input) and `fuzz_bezier_flatten`
+  (`path.rs`'s adaptive bezier flattening). `cargo +nightly fuzz build` is
+  green. The harness already found two new, unfixed crash bugs on its first
+  run — see the Known Issues section below.
+- **`crates/oxiui/examples/hello_headless.rs`** — a headless render smoke
+  test (no window/GPU/display) that exits non-zero if the rendered frame has
+  no visible content, gated behind a new `required-features = ["software"]`
+  example entry. `Dockerfile.ffi-audit` now runs it as a final smoke-test
+  layer, and `crates/oxiui/tests/example_compilation.rs` gained matching
+  `example_hello_headless_compiles` / `example_hello_headless_runs_and_exits_ok`
+  regression tests.
+- **`rustfmt.toml` / `clippy.toml`** at the workspace root (stable-only keys;
+  `clippy.toml`'s `msrv` matches `Cargo.toml`'s `rust-version = "1.89"`).
+
+### Changed
+
+- **`oxiui-slint::run_slint` / `oxiui-dioxus::run_dioxus` no longer fabricate
+  a successful run.** Both previously executed the content closure in
+  headless collection mode and returned `Ok(())` even though no window ever
+  opened — indistinguishable from a real window that opened and was closed.
+  They now return `Err(UiError::Unsupported(..))` until their native
+  event-loop integration actually lands (`slint::run_event_loop` for slint; a
+  Pure-Rust `dioxus-native` launch path for dioxus); `App::run()` with
+  `Backend::Dioxus` propagates the same. Headless widget collection via
+  `SlintCtx`/`DioxusCtx` directly is unaffected and remains the supported
+  headless-testing path.
+- **`OxiIcedWidget::draw` now renders.** The custom iced widget previously had
+  an empty `draw` body (a placed `WidgetSpec` was a correctly-sized invisible
+  hole); it now materializes the spec into a real iced element (the same
+  `build_one` pipeline `IcedUiCtx::into_iced_element` uses) and delegates
+  every `Widget` method — layout, draw, events, children, overlay — to it.
+- **`oxiui-web::set_theme` now actually changes the theme.** It previously
+  encoded an inert `"__theme:<name>"` sentinel through `inject_event` that no
+  code decoded (a fabricated `ImeCommit`, which risked inserting that literal
+  string into a focused text field). It now applies dark/light directly via
+  `egui::Context::set_theme`, and high-contrast via the COOLJAPAN WCAG-AAA
+  palette (`oxiui_theme::cooljapan_high_contrast()`) mapped through
+  `oxiui_egui::palette_to_egui_visuals` onto the `Dark` style slot.
+- **`oxiui-compute-wgpu`: GPU device-loss/OOM no longer panics a published
+  library.** `buffer::read_back` / `read_back_range` / `TypedBuffer::download`
+  now return `Result<_, ComputeError>` instead of `.expect()`-ing the device
+  poll and buffer-mapping outcomes; all five `Dispatcher` methods (`map_f32`,
+  `zip_map_f32`, `reduce_sum_f32`, `sph_density`, `sort_f32`) propagate it.
+  `integration::render_soft`'s GPU blur/dither/gradient-fill helpers and
+  `integration::text::rasterize_glyphs` keep their existing infallible public
+  signatures but now gracefully fall back to their CPU sibling implementation
+  on a GPU-runtime failure — the same fallback they already used for
+  "no GPU available" — instead of panicking.
+- `notify` (used only by the `oxiui-hot-reload-notify` quarantine crate)
+  moved from an inline per-crate version pin to `[workspace.dependencies]`.
+- **`pollster` updated from `0.4.0` to `1.0.1` (major version).** `oxiui`
+  re-exports `pollster` alongside `wgpu`/`bytemuck` for consumers driving the
+  async GPU device/adapter request calls, so this is a downstream-visible
+  bump, not just an internal dependency refresh.
+- `oxifft` updated from `0.4.1` to `0.4.2`.
+- `oxicode` updated from `0.2.5` to `0.2.6`.
+- `oxifont` updated from `0.2.1` to `0.2.2`.
+- `oxitext` updated from `0.2.1` to `0.2.2`; `oxitext-sdf` updated from
+  `0.2.1` to `0.2.2`.
+
+### Fixed
+
+- **`oxiui-web` compiles for `wasm32-unknown-unknown` again.** Two web-sys
+  features were missing from the workspace list (`HtmlHeadElement`,
+  `FontFaceDescriptors`), and several call sites had drifted from the web-sys
+  0.3.103 API shape: `document.exec_command` now goes through a
+  `web_sys::HtmlDocument` cast (added `HtmlDocument` feature);
+  `FontFace::new_with_str_and_descriptors` replaces the removed
+  `..str_and_str_sequence_or_descriptors` constructor, using the typed
+  `FontFaceDescriptors` dictionary instead of manual `js_sys::Reflect::set`
+  calls; `request_fullscreen` / `exit_fullscreen` are now called as the
+  synchronous `Result<(), JsValue>` / `()` functions web-sys 0.3.103 exposes
+  (previously assumed a `Promise` return and wrapped the call in
+  `spawn_local`); `ServiceWorkerRegistration::unregister` now handles its
+  `Result<Promise, JsValue>` return (a synchronous `Err` — no active worker —
+  now counts as "nothing unregistered" instead of being unreachable code).
+
+### Known Issues
+
+- `cargo fuzz run` on the new harness reproduces two pre-existing crashes in
+  `oxiui-render-soft` (not introduced by 0.2.2, not yet fixed): a
+  subtract-overflow panic in `scanline.rs`'s fast-forward loop and a
+  stack-overflow in `path.rs`'s `flatten_quad`/`flatten_cubic` from a
+  finite-input float overflow inside the private `mid()` helper. Repro inputs
+  are checked into `fuzz/regressions/` (unlike `fuzz/corpus/`/`fuzz/artifacts/`,
+  this directory is not gitignored) with decoded parameters in
+  `fuzz/regressions/README.md`. See `TODO.md`'s Production-Readiness Backlog
+  for the full writeup.
+
 ## [0.2.1] - 2026-07-30
 
 ### Added

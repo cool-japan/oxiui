@@ -54,3 +54,62 @@ fn example_hello_table_compiles() {
         "example 'hello_table' must compile"
     );
 }
+
+#[test]
+fn example_hello_headless_compiles() {
+    assert!(
+        build_example("hello_headless", "software"),
+        "example 'hello_headless' must compile"
+    );
+}
+
+/// Runs the built `hello_headless` example and asserts it exits successfully.
+///
+/// `hello_headless` is the M5 "headless smoke layer" gate: it renders a frame
+/// with no window/GPU/display and calls `std::process::exit(1)` if the buffer
+/// doesn't contain visible (non-background) content. `Dockerfile.ffi-audit`
+/// runs this same command as its final smoke-test layer; this test gives the
+/// same assertion durable, non-Docker-dependent coverage in the normal test
+/// suite (Docker may not be available in every CI/dev environment).
+#[test]
+fn example_hello_headless_runs_and_exits_ok() {
+    let build_status = Command::new("cargo")
+        .args([
+            "build",
+            "--quiet",
+            "-p",
+            "oxiui",
+            "--example",
+            "hello_headless",
+            "--features",
+            "software",
+        ])
+        .current_dir(WORKSPACE_ROOT)
+        .status();
+    let Ok(build_status) = build_status else {
+        // cargo unavailable — skip gracefully.
+        return;
+    };
+    assert!(build_status.success(), "hello_headless must build first");
+
+    let run_status = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "oxiui",
+            "--example",
+            "hello_headless",
+            "--features",
+            "software",
+        ])
+        .current_dir(WORKSPACE_ROOT)
+        .status();
+    // cargo unavailable — skip gracefully; otherwise assert a clean exit.
+    if let Ok(s) = run_status {
+        assert!(
+            s.success(),
+            "hello_headless must exit 0 (non-zero means it rendered no visible content)"
+        );
+    }
+}

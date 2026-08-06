@@ -124,10 +124,16 @@ pub fn unregister_all_service_workers(callback: UnregisterCallback) {
                 for i in 0..regs.length() {
                     let reg = regs.get(i);
                     let reg_typed: web_sys::ServiceWorkerRegistration = reg.into();
-                    let ok = wasm_bindgen_futures::JsFuture::from(reg_typed.unregister())
-                        .await
-                        .map(|v| v.as_bool().unwrap_or(false))
-                        .unwrap_or(false);
+                    // `unregister()` returns `Result<Promise, JsValue>` in
+                    // web-sys 0.3; a synchronous `Err` (no active worker) counts
+                    // as "nothing unregistered".
+                    let ok = match reg_typed.unregister() {
+                        Ok(promise) => wasm_bindgen_futures::JsFuture::from(promise)
+                            .await
+                            .map(|v| v.as_bool().unwrap_or(false))
+                            .unwrap_or(false),
+                        Err(_) => false,
+                    };
 
                     if ok {
                         count += 1;

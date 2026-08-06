@@ -84,10 +84,7 @@ pub type FontLoadCallback = Box<dyn FnOnce(Result<String, String>) + 'static>;
 pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
     #[cfg(target_arch = "wasm32")]
     {
-        use wasm_bindgen::JsValue;
         use wasm_bindgen_futures::spawn_local;
-
-        let family_clone = request.family.clone();
 
         spawn_local(async move {
             let result: Result<String, String> = async {
@@ -98,21 +95,18 @@ pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
                     .ok_or_else(|| "load_font: no document available".to_string())?;
 
                 let src = request.css_src();
-                let descriptors_str = request.css_descriptors();
 
-                // Build FontFaceDescriptors object.
-                let descriptors = js_sys::Object::new();
-                let weight_val = JsValue::from_str(request.weight.as_deref().unwrap_or("normal"));
-                let style_val = JsValue::from_str(request.style.as_deref().unwrap_or("normal"));
-                js_sys::Reflect::set(&descriptors, &JsValue::from_str("weight"), &weight_val)
-                    .map_err(|_| "load_font: failed to set weight descriptor".to_string())?;
-                js_sys::Reflect::set(&descriptors, &JsValue::from_str("style"), &style_val)
-                    .map_err(|_| "load_font: failed to set style descriptor".to_string())?;
+                // Build the FontFaceDescriptors (weight / style). web-sys 0.3
+                // exposes a typed `FontFaceDescriptors` dictionary with setter
+                // methods, gated behind the `FontFaceDescriptors` feature.
+                let descriptors = web_sys::FontFaceDescriptors::new();
+                descriptors.set_weight(request.weight.as_deref().unwrap_or("normal"));
+                descriptors.set_style(request.style.as_deref().unwrap_or("normal"));
 
-                let font_face = web_sys::FontFace::new_with_str_and_str_sequence_or_descriptors(
+                let font_face = web_sys::FontFace::new_with_str_and_descriptors(
                     &request.family,
                     &src,
-                    &descriptors.into(),
+                    &descriptors,
                 )
                 .map_err(|e| {
                     e.as_string().unwrap_or_else(|| {
@@ -123,8 +117,18 @@ pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
                     })
                 })?;
 
-                // Load the font (async).
-                let loaded_face = wasm_bindgen_futures::JsFuture::from(font_face.load())
+                // Load the font (async). `FontFace::load()` returns
+                // `Result<Promise, JsValue>` in web-sys 0.3; a synchronous `Err`
+                // (invalid descriptor) surfaces as a load failure.
+                let load_promise = font_face.load().map_err(|e| {
+                    e.as_string().unwrap_or_else(|| {
+                        format!(
+                            "load_font: FontFace.load() rejected for '{}'",
+                            request.family
+                        )
+                    })
+                })?;
+                let loaded_face = wasm_bindgen_futures::JsFuture::from(load_promise)
                     .await
                     .map_err(|e| {
                         e.as_string().unwrap_or_else(|| {
@@ -167,8 +171,6 @@ pub fn load_font(request: FontLoadRequest, callback: FontLoadCallback) {
 pub fn load_fonts_parallel(requests: Vec<FontLoadRequest>, callback: FontLoadCallback) {
     #[cfg(target_arch = "wasm32")]
     {
-        use wasm_bindgen_futures::spawn_local;
-
         if requests.is_empty() {
             callback(Ok(String::new()));
             return;

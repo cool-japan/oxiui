@@ -1,0 +1,11 @@
+# COOLJAPAN house rustfmt settings for oxiui.
+#
+# The workspace is already ~100% conformant with rustfmt's stable defaults, so
+# this file intentionally pins only the handful of settings the codebase
+# already relies on rather than introducing new ones that would trigger a
+# repo-wide reformat. Only STABLE keys are used — nightly-only options (e.g.
+# `imports_granularity`, `group_imports`, `wrap_comments`) are rejected by
+# stable `cargo fmt` and are deliberately omitted.
+edition = "2021"
+max_width = 100
+tab_spaces = 4

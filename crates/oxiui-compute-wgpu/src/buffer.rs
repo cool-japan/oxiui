@@ -107,7 +107,17 @@ pub fn staging_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Bu
 /// reinterpreted safely.
 ///
 /// # Panics
-/// Panics if the GPU mapping fails (device lost, buffer too small, …).
+/// Panics if `len` is zero (`T` of non-zero size times `len` must be > 0)
+/// — this is a caller contract violation, not a runtime GPU failure.
+///
+/// # Errors
+/// Returns [`crate::ComputeError::Operation`] if the device poll fails, the
+/// mapping channel closes before the callback fires, or the GPU mapping
+/// itself fails (device lost, out-of-memory, …). These are environmental
+/// runtime failures, not programmer errors, so they are reported rather than
+/// panicked — callers that have a CPU-side fallback available (as
+/// `integration::render_soft` and `integration::text` do) can degrade
+/// gracefully instead of aborting the process.
 #[cfg_attr(
     feature = "tracing",
     tracing::instrument(level = "debug", skip(device, queue, buf))
@@ -117,7 +127,7 @@ pub fn read_back<T: Pod>(
     queue: &wgpu::Queue,
     buf: &wgpu::Buffer,
     len: usize,
-) -> Vec<T> {
+) -> Result<Vec<T>, crate::ComputeError> {
     let byte_size = (std::mem::size_of::<T>() * len) as u64;
     assert!(byte_size > 0, "read_back: requested size must be > 0");
 
@@ -143,11 +153,20 @@ pub fn read_back<T: Pod>(
     // completes — the correct behaviour for a synchronous CPU readback.
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("read_back: device poll failed");
+        .map_err(|e| crate::ComputeError::Operation {
+            op: "read_back",
+            detail: e.to_string(),
+        })?;
 
     rx.recv()
-        .expect("read_back: channel closed before map callback")
-        .expect("read_back: GPU mapping failed");
+        .map_err(|_| crate::ComputeError::Operation {
+            op: "read_back",
+            detail: "channel closed before map callback fired".into(),
+        })?
+        .map_err(|e| crate::ComputeError::Operation {
+            op: "read_back",
+            detail: e.to_string(),
+        })?;
 
     // ── 4. Copy bytes to Vec<T> ────────────────────────────────────────────
     let mapped = slice.get_mapped_range();
@@ -157,7 +176,7 @@ pub fn read_back<T: Pod>(
     drop(mapped);
     staging.unmap();
 
-    result
+    Ok(result)
 }
 
 // ── Zero-copy upload ──────────────────────────────────────────────────────────
@@ -201,14 +220,20 @@ pub fn mapped_storage_init(device: &wgpu::Device, label: &str, data: &[u8]) -> w
 /// arrays share one large allocation.
 ///
 /// # Panics
-/// Panics if the GPU mapping fails.
+/// Panics if the computed byte range is zero-sized — a caller contract
+/// violation, not a runtime GPU failure.
+///
+/// # Errors
+/// Returns [`crate::ComputeError::Operation`] if the device poll fails, the
+/// mapping channel closes before the callback fires, or the GPU mapping
+/// itself fails (device lost, out-of-memory, …).
 pub fn read_back_range<T: bytemuck::Pod>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     src: &wgpu::Buffer,
     byte_offset: u64,
     len: usize,
-) -> Vec<T> {
+) -> Result<Vec<T>, crate::ComputeError> {
     let byte_size = (len * std::mem::size_of::<T>()) as u64;
     assert!(byte_size > 0, "read_back_range: requested size must be > 0");
     let staging = staging_buffer(device, "", byte_size);
@@ -225,16 +250,25 @@ pub fn read_back_range<T: bytemuck::Pod>(
     });
     device
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("read_back_range: device poll failed");
+        .map_err(|e| crate::ComputeError::Operation {
+            op: "read_back_range",
+            detail: e.to_string(),
+        })?;
     rx.recv()
-        .expect("read_back_range: channel closed before map callback")
-        .expect("read_back_range: GPU mapping failed");
+        .map_err(|_| crate::ComputeError::Operation {
+            op: "read_back_range",
+            detail: "channel closed before map callback fired".into(),
+        })?
+        .map_err(|e| crate::ComputeError::Operation {
+            op: "read_back_range",
+            detail: e.to_string(),
+        })?;
 
     let mapped = slice.get_mapped_range();
     let result = bytemuck::cast_slice::<u8, T>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();
-    result
+    Ok(result)
 }
 
 // ── Async readback ────────────────────────────────────────────────────────────
@@ -383,7 +417,15 @@ impl<T: bytemuck::Pod> TypedBuffer<T> {
     }
 
     /// Read the buffer contents back to the CPU as a `Vec<T>`.
-    pub fn download(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<T> {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if the GPU readback fails
+    /// (device lost, out-of-memory, …). See [`read_back`].
+    pub fn download(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<Vec<T>, crate::ComputeError> {
         read_back(device, queue, &self.buffer, self.len)
     }
 }
@@ -591,7 +633,7 @@ mod tests {
         let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
         let bytes = bytemuck::cast_slice::<f32, u8>(&data);
         let buf = storage_buffer_init(&ctx.device, "test-storage", bytes);
-        let back: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf, data.len());
+        let back: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf, data.len()).unwrap();
         assert_eq!(back, data);
     }
 
@@ -765,7 +807,7 @@ mod tests {
         let buf = storage_buffer_init(&ctx.device, "range-test", bytes);
 
         // Skip first f32 (4 bytes), read next 2 f32s.
-        let sub: Vec<f32> = read_back_range(&ctx.device, &ctx.queue, &buf, 4, 2);
+        let sub: Vec<f32> = read_back_range(&ctx.device, &ctx.queue, &buf, 4, 2).unwrap();
         assert_eq!(sub, vec![20.0f32, 30.0]);
     }
 
@@ -778,7 +820,7 @@ mod tests {
         let bytes = bytemuck::cast_slice::<f32, u8>(&data);
         let buf = storage_buffer_init(&ctx.device, "async-readback-test", bytes);
 
-        let sync_result: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf, data.len());
+        let sync_result: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf, data.len()).unwrap();
         let async_result: Vec<f32> =
             pollster::block_on(read_back_async(&ctx.device, &ctx.queue, &buf, data.len()))
                 .expect("async readback failed");

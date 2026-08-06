@@ -38,9 +38,10 @@ fullscreen = []
 ## Generic marker feature — bundler-level tree shaking experiments.
 web = []
 
-# wasm-bindgen, web-sys, eframe WebRunner and serde_json are only needed on the
-# wasm32 target.  They MUST NOT appear in [dependencies] — only here, so that
-# native builds (including --all-features) never attempt to compile them.
+# wasm-bindgen, web-sys, eframe WebRunner, serde_json, and oxiui-theme are only
+# needed on the wasm32 target.  They MUST NOT appear in [dependencies] — only
+# here, so that native builds (including --all-features) never attempt to
+# compile them.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen             = { workspace = true }
 wasm-bindgen-futures     = { workspace = true }
@@ -52,6 +53,10 @@ eframe                   = { workspace = true }
 egui                     = { workspace = true }
 serde_json               = { workspace = true }
 console_error_panic_hook.workspace = true
+# `set_theme`'s high-contrast palette (only reachable inside a
+# `#[cfg(target_arch = "wasm32")]` block — the live egui::Context to apply it
+# to only exists on wasm32).
+oxiui-theme              = { workspace = true }
 
 # Drag-and-drop: extra web-sys features needed only with the `drag-drop` gate.
 # These are already included in the workspace web-sys feature list; adding

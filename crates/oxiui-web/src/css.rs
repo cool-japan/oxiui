@@ -62,8 +62,6 @@ pub fn inject_canvas_styles() -> Result<(), String> {
 pub fn inject_css(css_text: &str, marker_attr: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
-        use wasm_bindgen::JsCast;
-
         let window =
             web_sys::window().ok_or_else(|| "inject_css: no window available".to_string())?;
         let document = window

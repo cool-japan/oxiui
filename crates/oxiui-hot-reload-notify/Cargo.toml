@@ -30,4 +30,4 @@ categories = ["filesystem", "rendering"]
 publish = true
 
 [dependencies]
-notify = { version = "8.2.0" }
+notify.workspace = true

@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.89"
 authors = ["COOLJAPAN OU (Team Kitasan)"]
@@ -64,7 +64,7 @@ softbuffer  = { version = "0.4.8" }
 # opt-in and off.  pollster blocks on wgpu's async adapter/device requests;
 # bytemuck supplies Pod/Zeroable derives for the vertex structs.
 wgpu                = { version = "29.0.3" }
-pollster            = { version = "0.4.0" }
+pollster            = { version = "1.0.1" }
 bytemuck            = { version = "1.25.0", features = ["derive"] }
 raw-window-handle   = { version = "0.6" }
 # `x11` + `wayland` enabled for the same reason as eframe above (iced_winit →
@@ -103,13 +103,15 @@ web-sys              = { version = "0.3.103", features = [
   # Media queries / responsive
   "MediaQueryList", "MediaQueryListEvent",
   # CSS / style injection
-  "HtmlStyleElement", "StyleSheet",
+  "HtmlStyleElement", "StyleSheet", "HtmlHeadElement",
+  # execCommand fallback (clipboard) lives on HtmlDocument, not Document
+  "HtmlDocument",
   # Performance
   "Performance", "PerformanceTiming",
   # Service worker
   "ServiceWorkerContainer", "ServiceWorkerRegistration",
   # Font loading
-  "FontFace", "FontFaceSet",
+  "FontFace", "FontFaceSet", "FontFaceDescriptors",
   # ARIA / accessibility helpers
   "Element",
   # Error handling
@@ -119,9 +121,9 @@ web-sys              = { version = "0.3.103", features = [
 ] }
 
 # Wave 1 + Wave 2 deps
-oxifont      = { version = "0.2.1" }
-oxitext      = { version = "0.2.1" }
-oxitext-sdf  = { version = "0.2.1" }
+oxifont      = { version = "0.2.2" }
+oxitext      = { version = "0.2.2" }
+oxitext-sdf  = { version = "0.2.2" }
 
 # PNG encoding/decoding — pure Rust, zero C deps
 png = { version = "0.18.1" }
@@ -140,7 +142,7 @@ dioxus = { version = "0.7.9", default-features = false, features = ["minimal"] }
 # Serialization — Pure Rust
 serde      = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
-oxicode    = { version = "0.2.5", features = ["derive"] }
+oxicode    = { version = "0.2.6", features = ["derive"] }
 
 # Observability — Pure Rust
 # tracing and tracing-subscriber are optional; gated behind the `tracing`
@@ -167,5 +169,11 @@ tray-icon = { version = "0.24.1", default-features = false, features = ["gtk"] }
 # macOS/Linux; on Windows uses COM which is OS-provided, not compiled in).
 rfd       = { version = "0.17.2" }
 
+# File watcher — NOT Pure Rust (pulls inotify-sys/fsevent-sys/kqueue-sys).
+# Used exclusively by the §5 quarantine crate `oxiui-hot-reload-notify`; no
+# other crate in this workspace may depend on it. See that crate's Cargo.toml
+# header for the full quarantine rationale.
+notify    = { version = "8.2.0" }
+
 # FFT — Pure Rust OxiFFT (COOLJAPAN ecosystem; replaces rustfft)
-oxifft    = { version = "0.4.1", default-features = false, features = ["std"] }
+oxifft    = { version = "0.4.2", default-features = false, features = ["std"] }

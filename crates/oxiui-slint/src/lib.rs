@@ -38,16 +38,20 @@
 //! and proceed with default slint styling. Full palette mapping is planned for
 //! M6 once a public API seam is confirmed.
 //!
-//! # Usage (native window)
+//! # Usage
 //!
-//! ```rust,ignore
-//! use oxiui_slint::run_slint;
-//! use oxiui_theme::cooljapan_dark;
+//! Native window rendering is not yet wired, so [`run_slint`] currently returns
+//! [`UiError::Unsupported`]. For headless widget collection, drive a
+//! [`SlintCtx`] directly:
 //!
-//! run_slint(&*cooljapan_dark(), |ui| {
-//!     ui.heading("Hello from Slint");
-//!     ui.label("OxiUI + slint backend");
-//! }).expect("slint run failed");
+//! ```rust
+//! use oxiui_core::UiCtx;
+//! use oxiui_slint::SlintCtx;
+//!
+//! let mut ctx = SlintCtx::default();
+//! ctx.heading("Hello from Slint");
+//! ctx.label("OxiUI + slint backend");
+//! assert_eq!(ctx.items.len(), 2);
 //! ```
 
 pub mod ctx;
@@ -66,50 +70,40 @@ use oxiui_core::{Palette, UiCtx, UiError};
 /// is not automatically applied to slint's global style in M5 (see the crate-level
 /// note).
 ///
-/// # Headless behaviour
+/// # Window behaviour
 ///
-/// When the `slint` feature is **disabled**, this function executes the content
-/// closure in headless collection mode via [`SlintCtx`] and returns `Ok(())`.
-/// No window is opened.
+/// This function is contracted to open a native slint window and run its event
+/// loop. That integration (`slint::run_event_loop` after building slint
+/// components from the collected widget tree) is **not yet wired**: it requires
+/// a live display at runtime (not exercise-able in headless CI) and the `slint`
+/// dependency is GPL-gated and off by default. Until it lands, `run_slint`
+/// returns a typed [`UiError::Unsupported`] rather than silently reporting a
+/// successful run that never opened a window.
 ///
-/// When the `slint` feature is **enabled**, the same headless path is taken for
-/// M5 to satisfy the "example builds" acceptance criterion. A native slint window
-/// can be opened via `slint::run_event_loop()` after building components; that
-/// integration is deferred to M6 (it requires a display at runtime and is
-/// not exercise-able in headless CI).
+/// For headless widget collection, construct a [`SlintCtx`] directly and drive
+/// it with your content closure — that path is fully supported and testable
+/// without a display.
 ///
 /// # Errors
 ///
-/// Returns [`UiError::Backend`] if the slint event loop reports an error (M6+).
-/// In M5 this function is always `Ok(())`.
+/// Always returns [`UiError::Unsupported`]: native slint window rendering is not
+/// yet implemented. Once the event loop is wired, this will instead return
+/// [`UiError::Backend`] if slint's event loop reports an error.
 pub fn run_slint<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>
 where
     F: FnOnce(&mut dyn UiCtx),
 {
-    // Access the palette to satisfy the function signature (future mapping use).
+    // Do NOT run the content closure or fabricate a successful exit: opening a
+    // native slint window is not implemented (see the doc comment). Surface an
+    // explicit typed error so callers can tell a real window run apart from a
+    // no-op. The parameters are consumed here only to keep the signature stable.
     let _pal: &Palette = palette.palette();
+    let _ = content;
 
-    // Execute the content closure in collection mode.
-    let mut ctx = SlintCtx::default();
-    content(&mut ctx);
-
-    // Production path (M6): build slint components from ctx.items, set palette
-    // colours via `slint::Color::from_argb_u8(a, r, g, b)`, and invoke
-    // `slint::run_event_loop()`. This requires a live display and is therefore
-    // deferred from M5.
-    //
-    // The `slint` feature gate is already active when this code is compiled;
-    // the actual slint::run_event_loop() call is commented out below until M6:
-    //
-    //   #[cfg(feature = "slint")]
-    //   {
-    //       let bg = slint::Color::from_argb_u8(
-    //           _pal.background.3, _pal.background.0,
-    //           _pal.background.1, _pal.background.2,
-    //       );
-    //       let _ = bg; // used in StyleMetrics once the public API is available
-    //       slint::run_event_loop().map_err(|e| UiError::Backend(e.to_string()))?;
-    //   }
-
-    Ok(())
+    Err(UiError::Unsupported(
+        "oxiui-slint: native window rendering via slint::run_event_loop is not \
+         yet implemented; construct a SlintCtx directly for headless widget \
+         collection"
+            .to_string(),
+    ))
 }

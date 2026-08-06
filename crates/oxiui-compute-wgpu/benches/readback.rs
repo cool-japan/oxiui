@@ -49,7 +49,7 @@ fn bench_readback_throughput(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     let result: Vec<f32> =
-                        read_back(&ctx.device, &ctx.queue, &gpu_buf, black_box(n_f32));
+                        read_back(&ctx.device, &ctx.queue, &gpu_buf, black_box(n_f32)).unwrap();
                     black_box(result);
                 });
             },

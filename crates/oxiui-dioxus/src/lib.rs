@@ -40,16 +40,20 @@
 //! automatically injected in M5. A helper `palette_to_css_vars()` is planned
 //! for M6 to emit `:root { --background: #rrggbb; ... }` global CSS.
 //!
-//! # Usage (headless)
+//! # Usage
 //!
-//! ```rust,ignore
-//! use oxiui_dioxus::run_dioxus;
-//! use oxiui_theme::cooljapan_dark;
+//! Native window rendering is not yet wired, so [`run_dioxus`] currently returns
+//! [`UiError::Unsupported`]. For headless widget collection, drive a
+//! [`DioxusCtx`] directly:
 //!
-//! run_dioxus(&*cooljapan_dark(), |ui| {
-//!     ui.heading("Hello from Dioxus");
-//!     ui.label("OxiUI + dioxus backend");
-//! }).expect("run_dioxus should be Ok");
+//! ```rust
+//! use oxiui_core::UiCtx;
+//! use oxiui_dioxus::DioxusCtx;
+//!
+//! let mut ctx = DioxusCtx::default();
+//! ctx.heading("Hello from Dioxus");
+//! ctx.label("OxiUI + dioxus backend");
+//! assert_eq!(ctx.items.len(), 2);
 //! ```
 
 pub mod ctx;
@@ -66,46 +70,41 @@ use oxiui_core::{Palette, UiCtx, UiError};
 /// colours are available for inline-style use in M6+; they are not
 /// automatically applied in M5 (see the crate-level note).
 ///
-/// # Behaviour in M5
+/// # Window behaviour
 ///
-/// In M5 this function executes the content closure in headless collection
-/// mode via [`DioxusCtx`] and returns `Ok(())`. No window is opened, no
-/// Dioxus runtime is started. This satisfies the "example builds" acceptance
-/// criterion without requiring a display or any C/C++ deps (wry/tao are not
-/// used).
+/// This function is contracted to launch a Dioxus runtime and open a window.
+/// That path (translating the collected widget tree into an `rsx!` element tree
+/// and calling `dioxus::launch`) is **not yet wired**: the Pure-Rust desktop
+/// renderer `dioxus-native` (Blitz/Vello) is not yet stable, and the `desktop`
+/// feature pulls C/C++ system deps that violate the Pure Rust policy. Until a
+/// Pure-Rust launch path lands, `run_dioxus` returns a typed
+/// [`UiError::Unsupported`] rather than silently reporting a successful run that
+/// never opened a window.
 ///
-/// The full Dioxus launch path (M6) will use `dioxus-native` (Pure Rust Blitz
-/// renderer) and looks like:
-///
-/// ```rust,ignore
-/// #[cfg(feature = "dioxus")]
-/// {
-///     let items = ctx.items.clone();
-///     dioxus::launch(move || {
-///         // translate `items` into rsx! element tree
-///         rsx! { /* ... */ }
-///     });
-/// }
-/// ```
+/// For headless widget collection, construct a [`DioxusCtx`] directly and drive
+/// it with your content closure — that path is fully supported and testable
+/// without a display or any heavy dependencies.
 ///
 /// # Errors
 ///
-/// Returns [`UiError::Backend`] if the Dioxus launch reports an error (M6+).
-/// In M5 this function is always `Ok(())`.
+/// Always returns [`UiError::Unsupported`]: native Dioxus window rendering is not
+/// yet implemented. Once the launch path is wired, this will instead return
+/// [`UiError::Backend`] if the Dioxus runtime reports an error.
 pub fn run_dioxus<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>
 where
     F: FnOnce(&mut dyn UiCtx),
 {
-    // Access the palette for future CSS variable generation.
+    // Do NOT run the content closure or fabricate a successful exit: launching a
+    // Dioxus window is not implemented (see the doc comment). Surface an explicit
+    // typed error so callers can tell a real window run apart from a no-op. The
+    // parameters are consumed here only to keep the signature stable.
     let _pal: &Palette = palette.palette();
+    let _ = content;
 
-    // Execute the content closure in collection mode.
-    let mut ctx = DioxusCtx::default();
-    content(&mut ctx);
-
-    // Production path (M6): translate ctx.items into a dioxus `rsx!` tree
-    // and call `dioxus::launch()`. Requires dioxus-native (Pure Rust renderer).
-    // This is deferred from M5 — see crate doc comment for rationale.
-
-    Ok(())
+    Err(UiError::Unsupported(
+        "oxiui-dioxus: native window rendering via dioxus::launch is not yet \
+         implemented (dioxus-native is not yet stable); construct a DioxusCtx \
+         directly for headless widget collection"
+            .to_string(),
+    ))
 }

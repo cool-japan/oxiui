@@ -1,0 +1,6 @@
+# COOLJAPAN house clippy settings for oxiui.
+#
+# `msrv` mirrors `[workspace.package].rust-version` in Cargo.toml so that
+# `clippy::incompatible_msrv` and other MSRV-aware lints check against the
+# same floor the crate actually promises to support.
+msrv = "1.89"

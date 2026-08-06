@@ -109,10 +109,14 @@
     - `text_input()` was already present. `text_area(&str, min_rows) -> TextAreaResponse` added
       to `UiCtx` trait (default = unsupported); `TextAreaResponse` added to `response.rs` and
       re-exported from `oxiui-core` (2026-06-03).
-- [ ] `oxiui-render-wgpu` integration: glyph atlas texture upload, SDF text rendering pipeline
-    - **BLOCKED: render-wgpu `DrawText` handler not yet implemented** (tracked in
-      oxiui-render-wgpu TODO item "SDF text rendering"). The oxiui-text API layer
-      (`GlyphAtlas`, `TextPipeline`) is complete; nothing more to do in this crate.
+- [x] `oxiui-render-wgpu` integration: glyph atlas texture upload, SDF text rendering pipeline
+    - **No longer blocked — corrected 2026-08-03.** `crates/oxiui-render-wgpu/src/text_bridge.rs`'s
+      `TextBridge::expand_draw_text_commands` (its "SDF text rendering" TODO item is `[x]` done)
+      pre-expands every `DrawCommand::DrawText` into per-glyph `DrawCommand::Image` blits — shaped
+      via `oxiui-text::TextPipeline`, rasterized through a `GlyphAtlas` LRU cache — *before*
+      `gpu/geometry.rs::build_geometry` runs, so no native `DrawText` case is needed in the
+      geometry builder itself (see the comment at `gpu/geometry.rs:417-422`). The oxiui-text API
+      layer (`GlyphAtlas`, `TextPipeline`) is complete and this integration consumes it as designed.
 - [x] `oxiui-render-soft` integration: glyph bitmap blitting into CPU framebuffer
     - Implemented in `oxiui-render-soft/src/backend.rs`: `draw_text_to_fb` shapes text via
       `TextPipeline`, blits glyph alpha bitmaps with colour tinting + clip; exported as

@@ -74,11 +74,21 @@ pub mod runner;
 ///
 /// Provides [`multiwindow::WindowRegistry`], [`multiwindow::SecondaryWindow`],
 /// and the [`App::open_window`] / [`App::close_window`] builder methods for
-/// registering secondary windows.  The underlying [`oxiui_core::window::WindowId`]
-/// and [`oxiui_core::window::WindowChannel`] types are also re-exported here.
+/// registering secondary windows, plus the runtime control plumbing
+/// ([`multiwindow::WindowHandle`], [`multiwindow::WindowCommand`],
+/// [`multiwindow::WindowSession`]) that the active backend consumes.
 pub mod multiwindow;
 
-pub use multiwindow::SecondaryWindow;
+pub use multiwindow::{SecondaryWindow, WindowCommand, WindowHandle, WindowSession};
+
+/// The backend-visible application shell (secondary windows + menu bar).
+///
+/// `App::run()` moves both into a [`shell::ShellConfig`] and hands it to the
+/// selected backend through [`BackendRunner::set_shell`] before the event loop
+/// starts.  See that module for the per-backend support matrix.
+pub mod shell;
+
+pub use shell::ShellConfig;
 
 /// In-app dialog queue (no OS file picker; Pure Rust).
 ///
@@ -89,14 +99,16 @@ pub mod dialog;
 
 pub use dialog::{DialogId, DialogKind, DialogQueue, DialogResponse};
 
-/// Native menu bar builder.
+/// Menu bar model and its backend-agnostic renderer.
 ///
 /// Provides [`menu::MenuBar`], [`menu::MenuBarBuilder`], [`menu::Menu`], and
-/// [`menu::MenuItem`] for constructing cross-platform application menu bars.
-/// Use [`App::with_menu_bar`] to attach a menu bar to the running app.
+/// [`menu::MenuItem`] for constructing cross-platform application menu bars,
+/// plus [`menu::render_menu_bar`] / [`menu::MenuBarState`], which draw the bar
+/// through any [`UiCtx`] and dispatch item actions.  Use [`App::menu_bar`] to
+/// attach a menu bar; the egui and iced backends render it automatically.
 pub mod menu;
 
-pub use menu::{Menu, MenuBar, MenuBarBuilder, MenuItem};
+pub use menu::{Menu, MenuBar, MenuBarBuilder, MenuBarState, MenuItem};
 
 #[cfg(feature = "egui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "egui")))]
@@ -470,6 +482,18 @@ pub struct App {
     dialogs: dialog::DialogQueue,
     /// Optional application-level menu bar.
     menu_bar: Option<menu::MenuBar>,
+    /// Which menu of [`App::menu_bar`] is open on the headless / a11y paths.
+    ///
+    /// The live backends own their own [`MenuBarState`]; this one only serves
+    /// [`App::run_headless_once`], [`App::run_headless_frame`] and
+    /// [`App::build_a11y_snapshot`].
+    menu_state: menu::MenuBarState,
+    /// Whether [`App::run_headless_frame`] has already fired the init phase.
+    ///
+    /// Mirrors `OxiEguiApp::initialised` / `OxiIcedState::initialised` so a
+    /// multi-frame headless session matches the live backends: `on_init` and
+    /// `Plugin::init` run exactly once, before the first frame's content.
+    headless_initialised: bool,
 }
 
 impl App {
@@ -495,6 +519,8 @@ impl App {
             window_registry: multiwindow::WindowRegistry::new(),
             dialogs: dialog::DialogQueue::new(),
             menu_bar: None,
+            menu_state: menu::MenuBarState::new(),
+            headless_initialised: false,
         }
     }
 
@@ -1043,14 +1069,23 @@ impl App {
     /// Register a secondary window with the given configuration.
     ///
     /// Returns the stable [`oxiui_core::window::WindowId`] assigned to the new
-    /// window.  The window descriptor is stored in the internal window registry and
-    /// passed to the active backend when `App::run()` starts.
+    /// window.  The descriptor is stored in the internal window registry and
+    /// moved into a [`ShellConfig`] when `App::run()` starts, which hands it to
+    /// the active backend via [`BackendRunner::set_shell`].
     ///
-    /// **Backend support:** egui secondary viewports require `egui::Context::
-    /// show_viewport_deferred` (planned for M7); iced multi-window requires
-    /// `iced::multi_window` (planned for M7).  In the current release the
-    /// descriptors are queued for backends to consume and windows are tracked
-    /// in the cross-window [`oxiui_core::window::WindowChannel`].
+    /// The window is opened as soon as the event loop starts and stays open
+    /// until the user closes it or the app closes it through
+    /// [`App::window_handle`].  It has no content closure, so backends draw a
+    /// placeholder label with the window title — use [`App::open_window_with`]
+    /// to render real content.
+    ///
+    /// **Backend support:** the default native egui backend opens one deferred
+    /// viewport (a real OS window) per descriptor.  The iced backend rejects
+    /// secondary windows with [`UiError::Unsupported`] when `App::run()` is
+    /// called (iced 0.14's `application` runtime drives a single window), and so
+    /// does any third-party runner that does not override
+    /// [`BackendRunner::set_shell`] — the registration is never silently
+    /// dropped.
     ///
     /// # Example
     ///
@@ -1069,12 +1104,74 @@ impl App {
         self.window_registry.open_window(config)
     }
 
+    /// Register a secondary window together with the closure that draws it.
+    ///
+    /// The closure is called once per frame of that window with the backend's
+    /// [`UiCtx`], exactly like the primary window's content closure.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui_core::window::WindowConfig;
+    ///
+    /// let mut app = App::new(AppConfig::new().title("Main"));
+    /// let wid = app.open_window_with(WindowConfig::new("Inspector"), |ui| {
+    ///     ui.heading("Inspector");
+    ///     ui.label("live values");
+    /// });
+    /// assert_eq!(app.secondary_windows()[0].id, wid);
+    /// ```
+    pub fn open_window_with<F>(
+        &mut self,
+        config: oxiui_core::window::WindowConfig,
+        content: F,
+    ) -> oxiui_core::window::WindowId
+    where
+        F: FnMut(&mut dyn UiCtx) + Send + 'static,
+    {
+        self.window_registry.open_window_with(config, content)
+    }
+
+    /// Borrow a cloneable handle for driving secondary windows at runtime.
+    ///
+    /// Clone it into content closures, hooks or worker threads and call
+    /// [`WindowHandle::open`] / [`WindowHandle::close`] /
+    /// [`WindowHandle::focus`]; the running backend applies the queued commands
+    /// at the start of the next frame.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui_core::window::WindowConfig;
+    ///
+    /// let mut app = App::new(AppConfig::new().title("Main"));
+    /// let wid = app.open_window(WindowConfig::new("Panel"));
+    /// let windows = app.window_handle().clone();
+    /// let app = app.content(move |ui| {
+    ///     if ui.button("Show panel").clicked {
+    ///         let _ = windows.focus(wid);
+    ///     }
+    /// });
+    /// drop(app);
+    /// ```
+    pub fn window_handle(&self) -> &WindowHandle {
+        self.window_registry.handle()
+    }
+
     /// Close (deregister) a previously opened secondary window.
     ///
     /// Returns the removed [`SecondaryWindow`] descriptor if `id` was found,
     /// or `None` if the window was not registered.
     ///
     /// Has no effect on the primary window (`WindowId::PRIMARY`).
+    ///
+    /// **Before `run()` only.** Deregistering removes the descriptor from the
+    /// registry, so `App::run()` never hands it to a backend.  To close a window
+    /// that is *already on screen*, use [`WindowHandle::close`] from
+    /// [`App::window_handle`] — the running backend applies that on the next
+    /// frame, and the window can be re-opened with [`WindowHandle::open`].
     pub fn close_window(&mut self, id: oxiui_core::window::WindowId) -> Option<SecondaryWindow> {
         self.window_registry.close_window(id)
     }
@@ -1090,6 +1187,11 @@ impl App {
     /// a specific window and
     /// [`oxiui_core::window::WindowChannel::drain_messages`] to consume it on
     /// the other side.
+    ///
+    /// The channel is a plain mailbox: **no backend drains it for you.** Clone
+    /// it (it is cheap and `Send + Sync`) into the window content closures you
+    /// pass to [`App::open_window_with`] and drain it there, at whatever point
+    /// in the frame makes sense for your app.
     pub fn window_channel(&self) -> &oxiui_core::window::WindowChannel {
         self.window_registry.channel()
     }
@@ -1238,9 +1340,15 @@ impl App {
     /// Attach a menu bar defined by a closure.
     ///
     /// The closure receives a [`MenuBarBuilder`] and should call
-    /// [`MenuBarBuilder::menu`] for each top-level menu.  Backends that support
-    /// native menu bars will translate the returned [`MenuBar`] into platform
-    /// widgets when `App::run()` starts.
+    /// [`MenuBarBuilder::menu`] for each top-level menu.  `App::run()` moves the
+    /// bar into a [`ShellConfig`]; the egui backend draws it at the top of the
+    /// primary frame and the iced backend at the top of the primary view, both
+    /// via [`menu::render_menu_bar`], which fires an item's callback when the
+    /// user selects it.
+    ///
+    /// A backend that cannot draw a menu bar rejects it with
+    /// [`UiError::Unsupported`] from [`BackendRunner::set_shell`] rather than
+    /// ignoring it.
     ///
     /// # Example
     ///
@@ -1347,9 +1455,27 @@ impl App {
         self.content.take().unwrap_or_else(|| Box::new(|_ui| {}))
     }
 
+    /// Move the registered secondary windows and menu bar into a [`ShellConfig`].
+    #[cfg(any(feature = "egui", feature = "iced"))]
+    fn take_shell(&mut self) -> ShellConfig {
+        let bar = self.menu_bar.take();
+        self.window_registry.take_shell(bar)
+    }
+
     #[cfg(feature = "dioxus")]
     fn run_dioxus_backend(mut self) -> Result<AppExit, UiError> {
         use oxiui_dioxus::run_dioxus;
+
+        // The dioxus adapter has no native event loop yet (`run_dioxus` returns
+        // `Unsupported`), so it can honour neither secondary windows nor a menu
+        // bar. Report that up front rather than after the fact.
+        if !self.window_registry.secondary_windows().is_empty() || self.menu_bar.is_some() {
+            return Err(UiError::Unsupported(
+                "the dioxus backend consumes neither secondary windows nor a menu bar; \
+                 use the default egui backend"
+                    .to_string(),
+            ));
+        }
 
         let theme_ref = self.theme.as_ref();
         if let Some(content) = self.content.take() {
@@ -1365,12 +1491,17 @@ impl App {
     fn run_iced_backend(mut self) -> Result<AppExit, UiError> {
         let lifecycle = self.take_lifecycle();
         let content = self.take_content();
-        let runner = IcedRunner {
+        let shell = self.take_shell();
+        let mut runner = IcedRunner {
             theme: self.theme,
             on_init: std::mem::take(&mut self.on_init),
             on_frame: std::mem::take(&mut self.on_frame),
             plugins: std::mem::take(&mut self.plugins),
+            menu_bar: None,
         };
+        // Fails with `UiError::Unsupported` if the app registered secondary
+        // windows, which the iced 0.14 single-window runtime cannot open.
+        runner.set_shell(shell)?;
         Box::new(runner).run(self.config, content, lifecycle)
     }
 
@@ -1383,14 +1514,18 @@ impl App {
     fn run_egui_dispatch(mut self) -> Result<AppExit, UiError> {
         let lifecycle = self.take_lifecycle();
         let content = self.take_content();
-        let runner = EguiRunner {
+        let shell = self.take_shell();
+        let mut runner = EguiRunner {
             theme: self.theme,
             on_init: std::mem::take(&mut self.on_init),
             on_frame: std::mem::take(&mut self.on_frame),
             plugins: std::mem::take(&mut self.plugins),
             frame_skip: self.frame_skip,
             egui_frame_hooks: std::mem::take(&mut self.egui_frame_hooks),
+            shell: ShellConfig::default(),
         };
+        // Infallible for the egui runner: it consumes the whole shell.
+        runner.set_shell(shell)?;
         Box::new(runner).run(self.config, content, lifecycle)
     }
 
@@ -1426,6 +1561,12 @@ impl App {
 
         let mut null = NullUiCtx;
 
+        // Draw the menu bar first, exactly like the live backends do. `NullUiCtx`
+        // never reports a click, so no item action can fire here.
+        if let Some(bar) = self.menu_bar.as_ref() {
+            menu::render_menu_bar(bar, &mut self.menu_state, &mut null);
+        }
+
         // Fire init hooks.
         for hook in self.on_init.iter_mut() {
             hook(&mut null);
@@ -1458,14 +1599,84 @@ impl App {
         Ok(AppExit::Ok)
     }
 
+    /// Drive one full frame through a caller-supplied [`UiCtx`].
+    ///
+    /// This is the display-free equivalent of what the egui / iced backends do
+    /// every frame, in the same order: the attached [`MenuBar`] is rendered
+    /// first (and item actions fire if `ui` reports a click), then `on_init` +
+    /// plugin `init` **on the first frame only**, then the content closure,
+    /// then `on_frame` + plugin `update`.  Unlike [`App::run_headless_once`] the
+    /// caller chooses the context, so a test or CI harness can observe (and
+    /// drive) every widget call across as many frames as it likes.
+    ///
+    /// Returns the number of menu-item actions dispatched in this frame.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui::{App, AppConfig};
+    /// use oxiui_core::{ButtonResponse, UiCtx};
+    ///
+    /// struct Clicker(&'static str, Vec<String>);
+    /// impl UiCtx for Clicker {
+    ///     fn heading(&mut self, _t: &str) {}
+    ///     fn label(&mut self, _t: &str) {}
+    ///     fn button(&mut self, label: &str) -> ButtonResponse {
+    ///         self.1.push(label.to_string());
+    ///         ButtonResponse { clicked: label == self.0, hovered: false }
+    ///     }
+    /// }
+    ///
+    /// let mut app = App::new(AppConfig::new().title("demo")).menu_bar(|mb| {
+    ///     mb.menu("File", |m| {
+    ///         m.item("Quit", None, || {});
+    ///     });
+    /// });
+    /// // Clicking "File" opens the drop-down, so its items are drawn too.
+    /// let mut ui = Clicker("File", Vec::new());
+    /// assert_eq!(app.run_headless_frame(&mut ui), 0);
+    /// assert_eq!(ui.1, vec!["File".to_string(), "Quit".to_string()]);
+    /// ```
+    pub fn run_headless_frame(&mut self, ui: &mut dyn UiCtx) -> usize {
+        self.plugins.sort_by_key(|p| p.priority());
+
+        let fired = match self.menu_bar.as_ref() {
+            Some(bar) => menu::render_menu_bar(bar, &mut self.menu_state, ui),
+            None => 0,
+        };
+
+        // Init fires exactly once per app, matching the live backends.
+        if !self.headless_initialised {
+            self.headless_initialised = true;
+            for hook in self.on_init.iter_mut() {
+                hook(ui);
+            }
+            for plugin in self.plugins.iter_mut() {
+                plugin.init(ui);
+            }
+        }
+        if let Some(ref mut f) = self.content {
+            f(ui);
+        }
+        for hook in self.on_frame.iter_mut() {
+            hook(ui);
+        }
+        for plugin in self.plugins.iter_mut() {
+            plugin.update(ui);
+        }
+        fired
+    }
+
     /// Run the app content once via [`RecordingUiCtx`] and return an accessibility tree.
     ///
     /// This is a headless operation — no event loop or real window is required.
-    /// The content closure (if any) is called once through [`RecordingUiCtx`];
-    /// all widget calls are captured as [`RecordingEntry`] nodes and assembled
-    /// into an [`oxiui_accessibility::A11yTree`] rooted at `window_id`.
+    /// The attached [`MenuBar`] (if any) is rendered first, then the content
+    /// closure is called once through [`RecordingUiCtx`]; all widget calls are
+    /// captured as [`RecordingEntry`] nodes and assembled into an
+    /// [`oxiui_accessibility::A11yTree`] rooted at `window_id`.
     ///
-    /// Returns an empty tree (no-op root) if no content closure has been set.
+    /// Returns an empty tree (no-op root) if neither a menu bar nor a content
+    /// closure has been set.
     ///
     /// # Feature
     /// Requires the `a11y` feature.
@@ -1475,6 +1686,9 @@ impl App {
         window_id: oxiui_accessibility::WindowA11yId,
     ) -> oxiui_accessibility::A11yTree {
         let mut recorder = recording::RecordingUiCtx::new();
+        if let Some(bar) = self.menu_bar.as_ref() {
+            menu::render_menu_bar(bar, &mut self.menu_state, &mut recorder);
+        }
         if let Some(ref mut f) = self.content {
             f(&mut recorder);
         }

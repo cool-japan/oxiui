@@ -501,6 +501,8 @@ pub fn cursor_css(shape: oxiui_core::CursorShape) -> &'static str {
 pub fn apply_cursor(canvas_id: &str, shape: oxiui_core::CursorShape) -> Result<(), MountError> {
     #[cfg(target_arch = "wasm32")]
     {
+        use wasm_bindgen::JsCast;
+
         let document = web_sys::window()
             .and_then(|w| w.document())
             .ok_or(MountError::InitFailed)?;
@@ -524,24 +526,64 @@ pub fn apply_cursor(canvas_id: &str, shape: oxiui_core::CursorShape) -> Result<(
 
 /// Set the active theme by name.
 ///
-/// On wasm32 this injects a `set_theme` event into the egui context held by
-/// [`WebHandle`].  On native targets this is always `Ok(())` (no-op).
+/// On wasm32 this applies the theme directly to the live `egui::Context` held
+/// by [`WebHandle`] (captured by `wasm::WasmApp` on its first paint) and
+/// requests a repaint so the change is visible on the next frame. On native
+/// targets this validates the name and is otherwise a no-op (there is no live
+/// context to apply it to).
 ///
-/// Recognised names (case-insensitive): `"dark"`, `"light"`, `"high-contrast"`.
+/// Recognised names (case-insensitive):
+/// - `"dark"` / `"light"` — pin the egui theme preference via
+///   `egui::Context::set_theme`, using egui's own default visuals for that
+///   theme.
+/// - `"high-contrast"` — apply the COOLJAPAN WCAG-AAA high-contrast palette
+///   (`oxiui_theme::cooljapan_high_contrast`, wasm32-only dependency — not a
+///   doc link here since it is out of scope for native `cargo doc` builds) to
+///   the `Dark` style slot (via [`oxiui_egui::palette_to_egui_visuals`]) and
+///   activate `Dark` so it takes effect immediately.
+///
 /// Unknown names are silently ignored (the current theme is preserved).
+///
+/// # Errors
+///
+/// Never fails — the `Result` is retained for API stability (e.g. a future
+/// theme name could require validation that can fail) and to match the
+/// signature of the other JS-facing handle operations.
 pub fn set_theme(handle: &WebHandle, theme_name: &str) -> Result<(), String> {
-    // We synthesize an ImeCommit event carrying the theme directive as a
-    // convention.  A real implementation would update the egui context's style.
-    // For now we just validate the name and no-op (the real egui-theme wiring
-    // belongs to the facade and is deferred to a future slice).
     let normalised = theme_name.to_lowercase();
-    let recognised = matches!(normalised.as_str(), "dark" | "light" | "high-contrast");
-    if !recognised {
+    if !matches!(normalised.as_str(), "dark" | "light" | "high-contrast") {
         return Ok(()); // Unknown theme name — silently ignore.
     }
-    // Forward via inject_event as a sentinel ImeCommit carrying the directive.
-    let payload = format!("{{\"ImeCommit\":\"__theme:{normalised}\"}}");
-    handle.inject_event(&payload)
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(guard) = handle.ctx_slot.lock() {
+            if let Some(ctx) = guard.as_ref() {
+                match normalised.as_str() {
+                    "dark" => ctx.set_theme(egui::ThemePreference::Dark),
+                    "light" => ctx.set_theme(egui::ThemePreference::Light),
+                    _ => {
+                        // Only "high-contrast" can reach here — "dark"/"light"
+                        // are handled above and anything else already
+                        // returned early.
+                        let hc_visuals = oxiui_egui::palette_to_egui_visuals(
+                            &oxiui_theme::cooljapan_high_contrast(),
+                        );
+                        ctx.set_visuals_of(egui::Theme::Dark, hc_visuals);
+                        ctx.set_theme(egui::ThemePreference::Dark);
+                    }
+                }
+                ctx.request_repaint();
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Native: name validated above; no live context to apply it to.
+        let _ = (handle, normalised);
+    }
+
+    Ok(())
 }
 
 /// Send a JSON-encoded UI event to the running app.

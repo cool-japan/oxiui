@@ -11,17 +11,24 @@ and `IcedRunner` (`crates/oxiui/src/runner.rs`) own the *real* `eframe::run_nati
 `iced::application` event loops and fire `on_close`/`on_resize`/`on_focus` for real
 (deduplicated via `runner::LifecycleTracker`) — these were stubs through M6 and
 became live in the 0.2.1 cycle. Headless mode (`run_headless_once`) and a Dioxus
-backend (headless collection mode) round out the picture. 159 tests pass with
-`--all-features`. Main remaining gap: wasm32 auto-dispatch from `App::run()` (see the
-`[~]` item below) and M7 backend rendering for the menu-bar / multi-window data
-models (registered but not yet drawn by the egui/iced backends).
+backend (headless collection mode) round out the picture. Main remaining gap:
+wasm32 auto-dispatch from `App::run()` (see the `[~]` item below).
+
+The menu-bar and multi-window data models are **no longer registration-only**: as of
+2026-08-04 `App::run()` moves both into a `shell::ShellConfig` and hands it to the
+backend via `BackendRunner::set_shell` (whose default impl rejects a non-empty shell
+with `UiError::Unsupported`, so nothing can be silently dropped). The native egui
+backend draws the menu bar above the content each frame and opens one deferred
+viewport (a real OS window) per secondary window; iced draws the menu bar and rejects
+secondary windows with a typed error.
 
 ## Core Implementation
 - [x] Window configuration: `App::window()` builder with `inner_size`, `min_size`, `max_size`, `resizable`, `decorations`, `transparent`, `always_on_top`, `icon`, `position`, `fullscreen` (~100 SLOC)
     - **Completed:** Integration first — egui `MockUiCtx`→`EguiUiCtx` rename fixed; iced threading updated to use `IcedConfig`/`apply_message`/`WidgetState`; private `OxiIcedMsg` enum removed, `oxiui_iced::Message` used directly. `AppConfig` + `AppExit` added. Lifecycle hooks (`on_init`, `on_frame`) added; Plugin trait + priority-ordered registry added; `HotkeyRegistry` with conflict detection added; `CommandPalette` with fuzzy matching added; `NotificationQueue` FIFO added; `prelude` + `core` re-export modules added. All examples updated to `App::new(AppConfig::new().title(...)).run()?`. 24 tests pass, 0 clippy warnings.
     - **Deferred:** dialog API (no rfd), system tray/native menu, logging/tracing dep, state persistence (oxicode), App::with_state, multi-window, screenshot API, App::run_with_return<T>, on_close/on_resize hooks, per-frame dirty flag.
 - [x] Multi-window support: `App::open_window(WindowConfig)` returning `WindowId`, per-window content closures, cross-window communication channel (~200 SLOC)
-  - **Completed 2026-06-03:** `src/multiwindow.rs` — `WindowRegistry` wraps `oxiui_core::WindowManager`; `App::open_window(WindowConfig) -> WindowId`, `App::close_window(WindowId)`, `App::secondary_windows() -> &[SecondaryWindow]`, `App::window_channel() -> &WindowChannel`. 8 unit tests in multiwindow.rs; 4 integration tests in app_tests.rs. Cross-window messaging via `WindowChannel::send`/`drain_messages`. Backend dispatch of secondary windows (egui `show_viewport_deferred`, iced multi-window) deferred to M7 — descriptors are queued for backends to consume.
+  - **Completed 2026-06-03:** `src/multiwindow.rs` — `WindowRegistry` wraps `oxiui_core::WindowManager`; `App::open_window(WindowConfig) -> WindowId`, `App::close_window(WindowId)`, `App::secondary_windows() -> &[SecondaryWindow]`, `App::window_channel() -> &WindowChannel`. 8 unit tests in multiwindow.rs; 4 integration tests in app_tests.rs. Cross-window messaging via `WindowChannel::send`/`drain_messages`.
+  - **Backend dispatch completed 2026-08-04:** `App::open_window_with(config, F)` registers a per-window content closure (`SharedContent = Arc<Mutex<ContentFn>>`); `App::window_handle()` hands out a cloneable `WindowHandle` for runtime `open`/`close`/`focus`; `WindowSession` folds those commands into the open-window set (typed `UiError::Window` for an unregistered id or a focus on a closed window). `OxiEguiApp::drive_secondary_windows` shows one `show_viewport_deferred` viewport per open descriptor and stops showing it when the user closes it. `IcedRunner::set_shell` returns `UiError::Unsupported` for secondary windows (iced 0.14 `application` is single-window; `iced::daemon` would be required).
   - **Files:** new `crates/oxiui/src/multiwindow.rs`; `crates/oxiui/src/lib.rs` (module + App methods).
 - [x] **Facade: iced-path lifecycle/plugin wiring, 7 window-config props, notify/hotkey/command-palette APIs, screenshot, run_with_return** (completed 2026-05-29)
   - **Goal:** finish the app shell — wire egui-only round-2 machinery into the iced path, surface built-but-unexposed registries through ergonomic App APIs.
@@ -46,7 +53,8 @@ models (registered but not yet drawn by the egui/iced backends).
   - **Completed 2026-06-03:** `src/tray.rs` — `TrayConfig` struct (icon_path, icon_bytes, tooltip, menu_items), `TrayMenuItem` enum (Action/Separator/SubMenu), `TrayHandle::mount(TrayConfig)` creates the OS tray icon when `tray` feature enabled (via `tray-icon 0.24` crate). `App::with_tray(TrayConfig) -> Result<Self, String>` builder. 8 unit tests pass (config builder, handle mount no-op without feature). With `tray` feature: menu-click callbacks are stored at data-model level; full event-loop integration (callbacks firing during eframe loop) is planned for a future release (basic implementation).
   - **Files:** new `crates/oxiui/src/tray.rs`; `crates/oxiui/src/lib.rs` (module + App method + pub use).
 - [x] Native menu bar: `App::menu_bar(|menu| { menu.item("File").submenu(|sub| { sub.item("Open").on_click(||) }) })` cross-platform menu builder (~100 SLOC)
-  - **Completed 2026-06-03:** `src/menu.rs` — `MenuBar::build(|mb| {...})` closure DSL; `Menu` with `item`, `separator`, `submenu`; `MenuItem` enum (Action/Separator/Submenu); `App::menu_bar(F)` and `App::with_menu_bar(MenuBar)` builders; `App::get_menu_bar() -> Option<&MenuBar>`. 8 unit tests in menu.rs; 5 integration tests in app_tests.rs. Backend translation (egui `egui-menu` / iced widget::menu) deferred to M7 — the data model is fully defined and tested.
+  - **Completed 2026-06-03:** `src/menu.rs` — `MenuBar::build(|mb| {...})` closure DSL; `Menu` with `item`, `separator`, `submenu`; `MenuItem` enum (Action/Separator/Submenu); `App::menu_bar(F)` and `App::with_menu_bar(MenuBar)` builders; `App::get_menu_bar() -> Option<&MenuBar>`. 8 unit tests in menu.rs; 5 integration tests in app_tests.rs.
+  - **Backend rendering completed 2026-08-04:** `menu::render_menu_bar(&MenuBar, &mut MenuBarState, &mut dyn UiCtx) -> usize` draws the tree with `UiCtx` primitives and fires the clicked item's callback; `MenuBarState` tracks the open menu/submenu chain across frames. Called by `OxiEguiApp::ui` (above the content), the iced `view` function, `App::run_headless_once`, `App::build_a11y_snapshot`, and the new `App::run_headless_frame(&mut dyn UiCtx)`. Container fallbacks (`menu_bar` → `horizontal` → inline, `popup` → `vertical` → inline) keep the bar visible on adapters like iced 0.14 whose `menu_bar` is unsupported.
   - **Files:** new `crates/oxiui/src/menu.rs`; `crates/oxiui/src/lib.rs` (module + App methods + pub use).
 - [x] Dialog API: `App::file_dialog()` (open/save), `App::message_dialog()` (alert/confirm/prompt), using rfd (Rust File Dialog) or custom impl (~80 SLOC)
   - **Completed 2026-06-03:** `src/dialog.rs` — pure in-process `DialogQueue` with `request(DialogKind) -> DialogId`, `pop_pending`, `respond(id, DialogResponse)`, `pop_response(id)`, `peek_response(id)`; `DialogKind` enum (Alert/Confirm/Prompt/FileOpen/FileSave); `DialogResponse` enum (Dismissed/Confirmed/Cancelled/Text/FilePaths/SavePath). `App::message_dialog`, `App::confirm_dialog`, `App::prompt_dialog`, `App::file_dialog`, `App::file_save_dialog`, `App::poll_dialog`, `App::respond_dialog`, `App::dialog_queue()`. 9 unit tests in dialog.rs; 6 integration tests in app_tests.rs.

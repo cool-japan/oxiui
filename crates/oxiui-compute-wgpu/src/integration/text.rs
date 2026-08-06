@@ -190,7 +190,10 @@ impl<'a> GlyphRasterizer<'a> {
 /// are written into `atlas` at the rectangular region starting at
 /// `(entry.atlas_x, entry.atlas_y)`.
 ///
-/// Falls back to CPU when `ctx` is `None`.
+/// Falls back to CPU when `ctx` is `None`, and *also* falls back if the GPU
+/// readback fails at runtime (device lost, out-of-memory, mapping failure)
+/// — `atlas` is not written to until the readback succeeds, so it is always
+/// safe to still hold its original content at fallback time.
 ///
 /// # Parameters
 /// - `ctx`          — optional GPU context.
@@ -271,8 +274,10 @@ pub fn rasterize_glyphs(
     }
     queue.submit(std::iter::once(enc.finish()));
 
-    let result: Vec<f32> = read_back(device, queue, &atlas_buf, atlas_n);
-    atlas[..atlas_n].copy_from_slice(&result);
+    match read_back::<f32>(device, queue, &atlas_buf, atlas_n) {
+        Ok(result) => atlas[..atlas_n].copy_from_slice(&result),
+        Err(_) => cpu_rasterize_glyphs(glyphs, src_coverage, atlas, params),
+    }
 }
 
 /// Pure-CPU fallback for glyph rasterization.

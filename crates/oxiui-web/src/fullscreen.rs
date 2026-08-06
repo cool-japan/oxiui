@@ -11,10 +11,11 @@
 
 /// Request fullscreen mode for the canvas element with the given DOM `id`.
 ///
-/// On `wasm32` this calls `element.requestFullscreen()`.  The request is
-/// asynchronous; the browser may show a fullscreen transition animation.
-/// The returned `Promise` is spawned via `spawn_local` and errors are silently
-/// discarded (no good way to surface them synchronously).
+/// On `wasm32` this calls `element.requestFullscreen()` (web-sys exposes it as a
+/// synchronous `Result<(), JsValue>`). The browser may show a fullscreen
+/// transition animation and may reject the request when there is no active user
+/// gesture; such a rejection is silently discarded (there is no good way to
+/// surface it synchronously to the caller).
 ///
 /// On non-wasm targets this is always `Ok(())`.
 ///
@@ -24,9 +25,6 @@
 pub fn request_fullscreen(canvas_id: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen_futures::spawn_local;
-
         let window = web_sys::window()
             .ok_or_else(|| "request_fullscreen: no window available".to_string())?;
         let document = window
@@ -36,12 +34,11 @@ pub fn request_fullscreen(canvas_id: &str) -> Result<(), String> {
             .get_element_by_id(canvas_id)
             .ok_or_else(|| format!("request_fullscreen: canvas '{canvas_id}' not found"))?;
 
-        // requestFullscreen() returns a Promise; spawn it without awaiting.
-        if let Some(promise) = element.request_fullscreen().ok() {
-            spawn_local(async move {
-                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-            });
-        }
+        // web-sys 0.3 exposes `requestFullscreen()` as a synchronous call
+        // returning `Result<(), JsValue>`. The browser may reject it (e.g. when
+        // there is no active user gesture); that rejection is not fatal to the
+        // caller, so it is intentionally discarded here.
+        let _ = element.request_fullscreen();
 
         Ok(())
     }
@@ -65,19 +62,15 @@ pub fn request_fullscreen(canvas_id: &str) -> Result<(), String> {
 pub fn exit_fullscreen() -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
-        use wasm_bindgen_futures::spawn_local;
-
         let window =
             web_sys::window().ok_or_else(|| "exit_fullscreen: no window available".to_string())?;
         let document = window
             .document()
             .ok_or_else(|| "exit_fullscreen: no document available".to_string())?;
 
-        if let Some(promise) = document.exit_fullscreen().ok() {
-            spawn_local(async move {
-                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-            });
-        }
+        // web-sys 0.3 exposes `exitFullscreen()` as a synchronous call
+        // returning `()`; it is a no-op when not currently in fullscreen.
+        document.exit_fullscreen();
 
         Ok(())
     }

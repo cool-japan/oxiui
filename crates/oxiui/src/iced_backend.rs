@@ -72,6 +72,15 @@ pub struct OxiIcedState {
     pub on_focus: RefCell<Vec<HookFn>>,
     /// Deduplicates raw size / focus / close snapshots into fired events.
     pub tracker: RefCell<LifecycleTracker>,
+    /// The application menu bar, drawn at the top of every `view` frame.
+    ///
+    /// `IcedUiCtx` reports `menu_bar` as unsupported (iced 0.14 has no native
+    /// menu container), so [`crate::menu::render_menu_bar`] falls back to a
+    /// `horizontal` row of buttons plus a `popup` drop-down — both of which the
+    /// iced adapter does implement.
+    pub menu_bar: Option<crate::menu::MenuBar>,
+    /// Which menu / submenu of [`OxiIcedState::menu_bar`] is currently open.
+    pub menu_state: RefCell<crate::menu::MenuBarState>,
 }
 
 impl OxiIcedState {
@@ -90,6 +99,8 @@ impl OxiIcedState {
             on_resize: RefCell::new(Vec::new()),
             on_focus: RefCell::new(Vec::new()),
             tracker: RefCell::new(LifecycleTracker::default()),
+            menu_bar: None,
+            menu_state: RefCell::new(crate::menu::MenuBarState::new()),
         }
     }
 
@@ -154,11 +165,31 @@ pub fn update(state: &mut OxiIcedState, msg: AppMessage) -> Task<AppMessage> {
     }
 }
 
+/// Widget-id base reserved for OxiUI's own chrome (currently the menu bar).
+///
+/// iced widget ids key both retained state and click routing, and they are
+/// allocated in draw order, so the menu bar — whose widget count changes as its
+/// drop-down opens and closes — must not share a range with the app content.
+/// Content keeps `0, 1, 2, …`; chrome starts here.
+pub(crate) const CHROME_ID_BASE: usize = usize::MAX / 2;
+
 /// iced view function — drives the content closure through `IcedUiCtx`.
 ///
 /// Also fires init hooks + plugin init on the first frame, and on_frame
 /// hooks + plugin update every frame. This mirrors the pattern used by
 /// `OxiEguiApp::ui()` (egui path).
+///
+/// ## Menu bar
+/// The application menu bar is drawn into a **separate** `IcedUiCtx` whose id
+/// range starts at [`CHROME_ID_BASE`], and its element is stacked above the
+/// content element. The separation is required: sharing one context would shift
+/// every content widget id whenever the drop-down opened, silently rerouting
+/// clicks and retained state.
+///
+/// Menu item callbacks fire from here (iced's render function) rather than from
+/// `update`, because iced's one-frame click latency means the click is only
+/// visible to the widget that re-renders it. This matches how OxiUI already
+/// drives the user's content closure — both run inside `view` on this backend.
 pub fn view(state: &OxiIcedState) -> Element<'_, AppMessage> {
     // Drain pending clicks for this frame.
     let clicks = {
@@ -175,6 +206,21 @@ pub fn view(state: &OxiIcedState) -> Element<'_, AppMessage> {
         title: state.title.clone(),
         spec_capacity_hint: 0,
     };
+
+    // Draw the application menu bar into its own context / id range and keep
+    // its element aside; it is stacked above the content below.
+    let menu_element: Option<Element<'static, Message>> = match state.menu_bar.as_ref() {
+        Some(bar) => match state.menu_state.try_borrow_mut() {
+            Ok(mut menu_state) => {
+                let mut menu_ctx = IcedUiCtx::with_id_base(config.clone(), CHROME_ID_BASE);
+                crate::menu::render_menu_bar(bar, &mut menu_state, &mut menu_ctx);
+                Some(menu_ctx.into_iced_element())
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+
     let mut ctx = IcedUiCtx::new(config);
 
     // Fire init hooks and plugin init exactly once.
@@ -213,7 +259,11 @@ pub fn view(state: &OxiIcedState) -> Element<'_, AppMessage> {
 
     // `into_iced_element()` returns `Element<'static, Message>`; tag every
     // widget message as `AppMessage::Widget` so lifecycle messages can coexist.
-    let elem: Element<'static, Message> = ctx.into_iced_element();
+    let content: Element<'static, Message> = ctx.into_iced_element();
+    let elem: Element<'static, Message> = match menu_element {
+        Some(menu) => iced::widget::column![menu, content].into(),
+        None => content,
+    };
     elem.map(AppMessage::Widget)
 }
 

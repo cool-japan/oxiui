@@ -36,50 +36,55 @@ use oxiui_compute_wgpu::{
     ComputeContext, DispatchBuilder,
 };
 
-// 1. Configure and build a compute context (Err on hosts with no GPU adapter).
-let Ok(ctx) = ComputeContext::builder()
-    .with_power_preference(wgpu::PowerPreference::HighPerformance)
-    .build()
-else {
-    return; // no GPU — skip gracefully
-};
+fn main() -> Result<(), oxiui_compute_wgpu::ComputeError> {
+    // 1. Configure and build a compute context (Err on hosts with no GPU adapter).
+    let Ok(ctx) = ComputeContext::builder()
+        .with_power_preference(wgpu::PowerPreference::HighPerformance)
+        .build()
+    else {
+        return Ok(()); // no GPU — skip gracefully
+    };
 
-// 2. Upload input data to a storage buffer.
-let input: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
-let buffer = storage_buffer_init(&ctx.device, "values", bytemuck::cast_slice(&input));
+    // 2. Upload input data to a storage buffer.
+    let input: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+    let buffer = storage_buffer_init(&ctx.device, "values", bytemuck::cast_slice(&input));
 
-// 3. Compile a WGSL compute shader (auto-layout from reflection).
-const SHADER: &str = r#"
-    @group(0) @binding(0) var<storage, read_write> data: array<f32>;
+    // 3. Compile a WGSL compute shader (auto-layout from reflection).
+    const SHADER: &str = r#"
+        @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 
-    @compute @workgroup_size(64)
-    fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-        if gid.x < arrayLength(&data) {
-            data[gid.x] = data[gid.x] * 2.0;
+        @compute @workgroup_size(64)
+        fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+            if gid.x < arrayLength(&data) {
+                data[gid.x] = data[gid.x] * 2.0;
+            }
         }
-    }
-"#;
-let pipeline = compute_pipeline(&ctx.device, SHADER, "main");
+    "#;
+    let pipeline = compute_pipeline(&ctx.device, SHADER, "main");
 
-// 4. Bind, dispatch (ceil-div grid), and submit in one call.
-let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-    label: Some("values-bind"),
-    layout: &pipeline.get_bind_group_layout(0),
-    entries: &[wgpu::BindGroupEntry {
-        binding: 0,
-        resource: buffer.as_entire_binding(),
-    }],
-});
+    // 4. Bind, dispatch (ceil-div grid), and submit in one call.
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("values-bind"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
 
-DispatchBuilder::new(&pipeline)
-    .bind(0, &bind_group)
-    .dispatch_1d(input.len() as u32, 64)
-    .label("double")
-    .submit(&ctx.device, &ctx.queue);
+    DispatchBuilder::new(&pipeline)
+        .bind(0, &bind_group)
+        .dispatch_1d(input.len() as u32, 64)
+        .label("double")
+        .submit(&ctx.device, &ctx.queue);
 
-// 5. Read the results back to the CPU.
-let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buffer, input.len());
-assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]);
+    // 5. Read the results back to the CPU. `read_back` returns `Result` —
+    //    device loss, OOM, or a lost adapter surface as `Err(ComputeError)`
+    //    rather than panicking.
+    let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buffer, input.len())?;
+    assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]);
+    Ok(())
+}
 ```
 
 ## API Overview

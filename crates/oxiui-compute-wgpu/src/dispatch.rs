@@ -82,7 +82,7 @@ fn validate_wgsl_op(op: &str) -> Result<(), &'static str> {
 ///
 /// if let Some(ctx) = ComputeContext::try_new() {
 ///     let d = ctx.dispatcher();
-///     let out = d.map_f32(&[1.0, 2.0, 3.0], "x * 2.0");
+///     let out = d.map_f32(&[1.0, 2.0, 3.0], "x * 2.0").unwrap();
 ///     assert_eq!(out, vec![2.0, 4.0, 6.0]);
 /// }
 /// ```
@@ -110,7 +110,11 @@ impl<'a> Dispatcher<'a> {
     /// expressions (letters, digits, whitespace, `+−*/%(,).!<>=_`). This rejects structural
     /// WGSL characters (`{`, `}`, `;`, `@`, newlines, etc.) that could escape the expression
     /// context and inject arbitrary shader code.
-    pub fn map_f32(&self, src: &[f32], op: &str) -> Vec<f32> {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if the GPU readback fails
+    /// (device lost, out-of-memory, …).
+    pub fn map_f32(&self, src: &[f32], op: &str) -> Result<Vec<f32>, crate::ComputeError> {
         assert!(
             !src.is_empty(),
             "Dispatcher::map_f32: src must be non-empty"
@@ -195,7 +199,16 @@ impl<'a> Dispatcher<'a> {
     /// expressions (letters, digits, whitespace, `+−*/%(,).!<>=_`). This rejects structural
     /// WGSL characters (`{`, `}`, `;`, `@`, newlines, etc.) that could escape the expression
     /// context and inject arbitrary shader code.
-    pub fn zip_map_f32(&self, a: &[f32], b: &[f32], op: &str) -> Vec<f32> {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if the GPU readback fails
+    /// (device lost, out-of-memory, …).
+    pub fn zip_map_f32(
+        &self,
+        a: &[f32],
+        b: &[f32],
+        op: &str,
+    ) -> Result<Vec<f32>, crate::ComputeError> {
         assert!(
             !a.is_empty(),
             "Dispatcher::zip_map_f32: a must be non-empty"
@@ -278,7 +291,11 @@ impl<'a> Dispatcher<'a> {
     ///
     /// # Panics
     /// Panics if `data` is empty.
-    pub fn reduce_sum_f32(&self, data: &[f32]) -> f32 {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if the GPU readback fails
+    /// (device lost, out-of-memory, …).
+    pub fn reduce_sum_f32(&self, data: &[f32]) -> Result<f32, crate::ComputeError> {
         assert!(
             !data.is_empty(),
             "Dispatcher::reduce_sum_f32: data must be non-empty"
@@ -322,8 +339,8 @@ impl<'a> Dispatcher<'a> {
         }
         queue.submit(std::iter::once(encoder.finish()));
 
-        let result = read_back::<f32>(device, queue, &output_buf, 1);
-        result[0]
+        let result = read_back::<f32>(device, queue, &output_buf, 1)?;
+        Ok(result[0])
     }
 
     /// Compute SPH density for all particles using the poly-6 kernel W(r,h).
@@ -340,7 +357,16 @@ impl<'a> Dispatcher<'a> {
     ///
     /// # Panics
     /// Panics if `positions` is empty or `positions.len() != masses.len()`.
-    pub fn sph_density(&self, positions: &[[f32; 3]], masses: &[f32], h: f32) -> Vec<f32> {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if the GPU readback fails
+    /// (device lost, out-of-memory, …).
+    pub fn sph_density(
+        &self,
+        positions: &[[f32; 3]],
+        masses: &[f32],
+        h: f32,
+    ) -> Result<Vec<f32>, crate::ComputeError> {
         assert!(
             !positions.is_empty(),
             "Dispatcher::sph_density: positions must be non-empty"
@@ -439,7 +465,11 @@ impl<'a> Dispatcher<'a> {
     ///
     /// # Panics
     /// Panics if `data` is empty.
-    pub fn sort_f32(&self, data: &[f32]) -> Vec<f32> {
+    ///
+    /// # Errors
+    /// Returns [`crate::ComputeError::Operation`] if a per-step device poll
+    /// fails or the final GPU readback fails (device lost, out-of-memory, …).
+    pub fn sort_f32(&self, data: &[f32]) -> Result<Vec<f32>, crate::ComputeError> {
         assert!(
             !data.is_empty(),
             "Dispatcher::sort_f32: data must be non-empty"
@@ -516,16 +546,19 @@ impl<'a> Dispatcher<'a> {
                 // Ensure each step completes before the next (reads-after-writes).
                 device
                     .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("sort_f32: device poll failed");
+                    .map_err(|e| crate::ComputeError::Operation {
+                        op: "sort_f32",
+                        detail: e.to_string(),
+                    })?;
 
                 j >>= 1;
             }
             k <<= 1;
         }
 
-        let sorted = read_back::<f32>(device, queue, &data_buf, padded_len);
+        let sorted = read_back::<f32>(device, queue, &data_buf, padded_len)?;
         // Truncate to original length, removing f32::MAX padding sentinels.
-        sorted[..original_len].to_vec()
+        Ok(sorted[..original_len].to_vec())
     }
 }
 
@@ -539,7 +572,7 @@ mod tests {
     fn map_f32_doubles() {
         oxiui_core::require_gpu!(ctx, ComputeContext::try_new());
         let d = Dispatcher::new(&ctx);
-        let out = d.map_f32(&[1.0_f32, 2.0, 3.0], "x * 2.0");
+        let out = d.map_f32(&[1.0_f32, 2.0, 3.0], "x * 2.0").unwrap();
         assert_eq!(out.len(), 3);
         assert!((out[0] - 2.0).abs() < 1e-5, "expected 2.0, got {}", out[0]);
         assert!((out[1] - 4.0).abs() < 1e-5, "expected 4.0, got {}", out[1]);
@@ -550,7 +583,9 @@ mod tests {
     fn zip_map_f32_adds() {
         oxiui_core::require_gpu!(ctx, ComputeContext::try_new());
         let d = Dispatcher::new(&ctx);
-        let out = d.zip_map_f32(&[1.0_f32, 2.0], &[3.0, 4.0], "a + b");
+        let out = d
+            .zip_map_f32(&[1.0_f32, 2.0], &[3.0, 4.0], "a + b")
+            .unwrap();
         assert_eq!(out.len(), 2);
         assert!((out[0] - 4.0).abs() < 1e-5, "expected 4.0, got {}", out[0]);
         assert!((out[1] - 6.0).abs() < 1e-5, "expected 6.0, got {}", out[1]);
@@ -560,7 +595,7 @@ mod tests {
     fn reduce_sum_f32_correct() {
         oxiui_core::require_gpu!(ctx, ComputeContext::try_new());
         let d = Dispatcher::new(&ctx);
-        let sum = d.reduce_sum_f32(&[1.0_f32, 2.0, 3.0, 4.0]);
+        let sum = d.reduce_sum_f32(&[1.0_f32, 2.0, 3.0, 4.0]).unwrap();
         assert!((sum - 10.0).abs() < 1e-3, "expected 10.0, got {sum}");
     }
 
@@ -572,7 +607,7 @@ mod tests {
         // Self-contribution: W(0, 1) = (315/(64π·1⁹)) · (1² − 0²)³ = 315/(64π) > 0.
         let positions = [[0.0_f32, 0.0, 0.0]];
         let masses = [1.0_f32];
-        let densities = d.sph_density(&positions, &masses, 1.0);
+        let densities = d.sph_density(&positions, &masses, 1.0).unwrap();
         assert_eq!(densities.len(), 1);
         assert!(
             densities[0] > 0.0,
@@ -585,7 +620,7 @@ mod tests {
     fn sort_f32_small() {
         oxiui_core::require_gpu!(ctx, ComputeContext::try_new());
         let d = Dispatcher::new(&ctx);
-        let out = d.sort_f32(&[4.0_f32, 2.0, 3.0, 1.0]);
+        let out = d.sort_f32(&[4.0_f32, 2.0, 3.0, 1.0]).unwrap();
         assert_eq!(out, vec![1.0_f32, 2.0, 3.0, 4.0]);
     }
 

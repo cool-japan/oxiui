@@ -51,7 +51,7 @@
 //! }
 //! ctx.queue.submit(std::iter::once(encoder.finish()));
 //!
-//! let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buffer, input.len());
+//! let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buffer, input.len()).unwrap();
 //! assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]);
 //! ```
 //!

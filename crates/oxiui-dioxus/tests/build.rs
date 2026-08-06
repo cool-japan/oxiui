@@ -45,16 +45,23 @@ fn dioxus_ctx_multiple_widgets() {
     assert_eq!(ctx.items.len(), 3);
 }
 
-#[cfg(feature = "dioxus")]
 #[test]
-fn run_dioxus_headless_ok() {
+fn run_dioxus_reports_unsupported_window() {
+    use oxiui_core::UiError;
     use oxiui_dioxus::run_dioxus;
     use oxiui_theme::cooljapan_default;
 
+    // `run_dioxus` is contracted to launch a window; that path is not yet wired,
+    // so it must surface a typed `UiError::Unsupported` rather than a fake
+    // success. A caller must be able to tell "no window opened" from Ok.
     let theme = cooljapan_default();
-    run_dioxus(&*theme, |ui| {
+    let err = run_dioxus(&*theme, |ui| {
         ui.heading("Dioxus test");
         ui.label("headless");
     })
-    .expect("run_dioxus should return Ok in M5 headless mode");
+    .expect_err("run_dioxus must not report success without opening a window");
+    assert!(
+        matches!(err, UiError::Unsupported(_)),
+        "expected UiError::Unsupported, got {err:?}"
+    );
 }

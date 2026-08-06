@@ -7,7 +7,7 @@
 
 Dioxus is dual-licensed **MIT OR Apache-2.0**, so this adapter carries no copyleft obligations. The adapter is configured to use Dioxus's `minimal` feature set (`macro`, `html`, `signals`, `hooks`, `launch`) — all Pure Rust. The `desktop` feature (wry/tao/WebKit/Chromium) is intentionally **excluded** because it pulls in C/C++ system dependencies that violate the COOLJAPAN Pure-Rust policy. The crate is fully usable with `default = []` (collection mode) and pulls in the `dioxus` crate only when you enable `--features dioxus`.
 
-> **Milestone status:** As of M5, [`run_dioxus`] executes the content closure in headless collection mode (no display, no Dioxus runtime) and returns `Ok(())`. Full native rendering — translating collected items into an `rsx!` element tree and launching via `dioxus-native` (the Pure-Rust Blitz/Vello renderer) — is deferred to M6.
+> **Milestone status:** Native Dioxus window rendering is not yet wired — the Pure-Rust `dioxus-native` (Blitz/Vello) renderer is not yet stable, and the `desktop` feature pulls in wry/tao/WebKit (C/C++), which violates the Pure Rust policy. [`run_dioxus`] therefore returns a typed `UiError::Unsupported` rather than a fake success, so callers can distinguish "no window opened" from `Ok`. For headless widget collection, construct a [`DioxusCtx`] directly (fully supported, no display or heavy deps).
 
 ## Installation
 
@@ -37,18 +37,20 @@ assert_eq!(ctx.items.len(), 3);
 assert_eq!(ctx.items[0], "heading:App Title");
 ```
 
-### Driving a content closure with a theme
+### Headless widget collection (supported today)
 
-```rust,ignore
-use oxiui_dioxus::run_dioxus;
-use oxiui_theme::cooljapan_dark;
+```rust
+use oxiui_core::UiCtx;
+use oxiui_dioxus::DioxusCtx;
 
-run_dioxus(&*cooljapan_dark(), |ui| {
-    ui.heading("Hello from Dioxus");
-    ui.label("OxiUI + dioxus backend");
-})
-.expect("run_dioxus should be Ok");
+let mut ctx = DioxusCtx::default();
+ctx.heading("Hello from Dioxus");
+ctx.label("OxiUI + dioxus backend");
+assert_eq!(ctx.items.len(), 2);
 ```
+
+`run_dioxus` currently returns `UiError::Unsupported` (the native window path is
+not yet wired); use `DioxusCtx` directly for headless collection.
 
 ## API Overview
 
@@ -62,7 +64,7 @@ run_dioxus(&*cooljapan_dark(), |ui| {
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| [`run_dioxus`] | `run_dioxus<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>` where `F: FnOnce(&mut dyn UiCtx)` | Runs one Dioxus-backed UI frame. Executes `content` against a `DioxusCtx` in collection mode. Returns `Ok(())` in M5. |
+| [`run_dioxus`] | `run_dioxus<F>(palette: &dyn oxiui_core::Theme, content: F) -> Result<(), UiError>` where `F: FnOnce(&mut dyn UiCtx)` | Contracted to launch a Dioxus window. That path is not yet wired (dioxus-native is not yet stable), so it currently returns `UiError::Unsupported`. Use `DioxusCtx` directly for headless collection. |
 
 ### `DioxusCtx` as a `UiCtx`
 
@@ -84,7 +86,7 @@ The `items` entries use the format `"<kind>:<text>"` (e.g. `"label:Hello"`, `"bu
 
 ## Errors
 
-[`run_dioxus`] returns `Result<(), oxiui_core::UiError>`. In M5 it is always `Ok(())`. From M6 onward it will return [`UiError::Backend`] if the Dioxus launch reports an error. `UiError` is `#[non_exhaustive]`; see [`oxiui-core`](../oxiui-core) for the full variant list.
+[`run_dioxus`] returns `Result<(), oxiui_core::UiError>`. It currently always returns [`UiError::Unsupported`] because the native Dioxus window path is not yet wired. Once the launch path lands it will return `Ok(())` on a clean exit, or [`UiError::Backend`] if the Dioxus runtime reports an error. `UiError` is `#[non_exhaustive]`; see [`oxiui-core`](../oxiui-core) for the full variant list.
 
 ## Palette mapping note
 

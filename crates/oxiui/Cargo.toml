@@ -111,3 +111,7 @@ required-features = ["table"]
 [[example]]
 name = "hello_dioxus"
 required-features = ["dioxus"]
+
+[[example]]
+name = "hello_headless"
+required-features = ["software"]

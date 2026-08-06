@@ -19,6 +19,7 @@
 //! changes and `on_close` fires at most once. See
 //! [`crate::runner::LifecycleTracker::observe`].
 
+use crate::shell::ShellConfig;
 use crate::{AppConfig, AppExit, HookFn};
 use oxiui_core::UiError;
 
@@ -131,6 +132,30 @@ pub trait BackendRunner: Send + 'static {
         content: ContentFn,
         lifecycle: LifecycleConfig,
     ) -> Result<AppExit, UiError>;
+
+    /// Hand the runner the application shell (secondary windows + menu bar).
+    ///
+    /// [`crate::App::run`] calls this once, before [`BackendRunner::run`], with
+    /// everything the facade's window / menu builder APIs registered. A runner
+    /// that stores the shell must actually render it.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation accepts an empty shell and rejects a
+    /// non-empty one with [`UiError::Unsupported`], so a backend that cannot
+    /// open secondary windows or draw a menu bar reports that to the caller
+    /// instead of silently dropping the request. Override it to consume the
+    /// shell (or to reject only the parts the backend cannot honour).
+    fn set_shell(&mut self, shell: ShellConfig) -> Result<(), UiError> {
+        if shell.is_empty() {
+            Ok(())
+        } else {
+            Err(UiError::Unsupported(format!(
+                "this backend runner does not consume the application shell ({})",
+                shell.describe()
+            )))
+        }
+    }
 }
 
 /// Live [`BackendRunner`] for the egui backend.
@@ -148,6 +173,8 @@ pub struct EguiRunner {
     pub(crate) plugins: Vec<Box<dyn crate::Plugin>>,
     pub(crate) frame_skip: bool,
     pub(crate) egui_frame_hooks: Vec<crate::EguiFrameHook>,
+    /// Secondary windows + menu bar handed over by [`BackendRunner::set_shell`].
+    pub(crate) shell: ShellConfig,
 }
 
 #[cfg(feature = "egui")]
@@ -160,6 +187,7 @@ impl Default for EguiRunner {
             plugins: Vec::new(),
             frame_skip: false,
             egui_frame_hooks: Vec::new(),
+            shell: ShellConfig::default(),
         }
     }
 }
@@ -180,6 +208,16 @@ impl EguiRunner {
 
 #[cfg(feature = "egui")]
 impl BackendRunner for EguiRunner {
+    /// Store the shell; the native egui backend honours all of it.
+    ///
+    /// Secondary windows become deferred viewports (real OS windows) and the
+    /// menu bar is drawn at the top of the primary frame. On wasm32 the whole
+    /// [`BackendRunner::run`] path is unsupported, so nothing is silently lost.
+    fn set_shell(&mut self, shell: ShellConfig) -> Result<(), UiError> {
+        self.shell = shell;
+        Ok(())
+    }
+
     fn run(
         self: Box<Self>,
         config: AppConfig,
@@ -221,6 +259,7 @@ impl EguiRunner {
             mut plugins,
             frame_skip,
             egui_frame_hooks,
+            shell,
         } = self;
 
         let palette = theme.palette().clone();
@@ -283,6 +322,14 @@ impl EguiRunner {
             on_focus,
         } = lifecycle;
 
+        let ShellConfig {
+            windows,
+            contents,
+            menu_bar,
+            handle: window_handle,
+        } = shell;
+        let session = crate::multiwindow::WindowSession::from_descriptors(&windows);
+
         eframe::run_native(
             &title,
             native_opts,
@@ -307,6 +354,13 @@ impl EguiRunner {
                     on_resize,
                     on_focus,
                     tracker: LifecycleTracker::default(),
+                    menu_bar,
+                    menu_state: crate::menu::MenuBarState::new(),
+                    windows,
+                    window_contents: contents,
+                    window_handle,
+                    session,
+                    os_closed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
                 }))
             }),
         )
@@ -327,6 +381,10 @@ pub struct IcedRunner {
     pub(crate) on_init: Vec<HookFn>,
     pub(crate) on_frame: Vec<HookFn>,
     pub(crate) plugins: Vec<Box<dyn crate::Plugin>>,
+    /// Menu bar handed over by [`BackendRunner::set_shell`]; iced 0.14 cannot
+    /// open secondary windows from the single-window `iced::application`
+    /// entry point, so those are rejected rather than stored.
+    pub(crate) menu_bar: Option<crate::menu::MenuBar>,
 }
 
 #[cfg(feature = "iced")]
@@ -337,6 +395,7 @@ impl Default for IcedRunner {
             on_init: Vec::new(),
             on_frame: Vec::new(),
             plugins: Vec::new(),
+            menu_bar: None,
         }
     }
 }
@@ -357,6 +416,27 @@ impl IcedRunner {
 
 #[cfg(feature = "iced")]
 impl BackendRunner for IcedRunner {
+    /// Accept the menu bar; reject secondary windows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UiError::Unsupported`] when the app registered secondary
+    /// windows: iced 0.14's `iced::application` entry point drives exactly one
+    /// window, and multi-window support requires the `iced::daemon` runtime,
+    /// which OxiUI does not target in this release. Reporting the error keeps
+    /// `App::run()` honest instead of dropping the windows on the floor.
+    fn set_shell(&mut self, shell: ShellConfig) -> Result<(), UiError> {
+        if shell.has_secondary_windows() {
+            return Err(UiError::Unsupported(format!(
+                "the iced backend cannot open secondary windows ({} registered); \
+                 use the default egui backend for multi-window apps",
+                shell.windows.len()
+            )));
+        }
+        self.menu_bar = shell.menu_bar;
+        Ok(())
+    }
+
     fn run(
         self: Box<Self>,
         config: AppConfig,
@@ -373,6 +453,7 @@ impl BackendRunner for IcedRunner {
             on_init,
             on_frame,
             mut plugins,
+            menu_bar,
         } = *self;
 
         let iced_theme = palette_to_iced_theme(&theme.palette().clone());
@@ -399,10 +480,114 @@ impl BackendRunner for IcedRunner {
             on_resize: RefCell::new(on_resize),
             on_focus: RefCell::new(on_focus),
             tracker: RefCell::new(LifecycleTracker::default()),
+            menu_bar,
+            menu_state: RefCell::new(crate::menu::MenuBarState::new()),
         };
 
         crate::iced_backend::run(state, iced_theme, config.width, config.height)
             .map(|()| AppExit::Ok)
             .map_err(|e| UiError::Backend(e.to_string()))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::MenuBar;
+    use crate::multiwindow::WindowRegistry;
+    use oxiui_core::window::WindowConfig;
+
+    /// A runner that keeps the default `set_shell` implementation.
+    struct InertRunner;
+
+    impl BackendRunner for InertRunner {
+        fn run(
+            self: Box<Self>,
+            _config: AppConfig,
+            _content: ContentFn,
+            _lifecycle: LifecycleConfig,
+        ) -> Result<AppExit, UiError> {
+            Ok(AppExit::Ok)
+        }
+    }
+
+    fn shell_with_window() -> ShellConfig {
+        let mut reg = WindowRegistry::new();
+        reg.open_window(WindowConfig::new("secondary"));
+        reg.take_shell(None)
+    }
+
+    fn shell_with_menu() -> ShellConfig {
+        WindowRegistry::new().take_shell(Some(MenuBar::build(|mb| {
+            mb.menu("File", |m| {
+                m.item("Quit", None, || {});
+            });
+        })))
+    }
+
+    #[test]
+    fn default_set_shell_accepts_an_empty_shell() {
+        let mut runner = InertRunner;
+        assert!(runner.set_shell(ShellConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn default_set_shell_rejects_secondary_windows() {
+        let mut runner = InertRunner;
+        let err = runner
+            .set_shell(shell_with_window())
+            .expect_err("a runner that ignores the shell must not accept it");
+        assert!(matches!(err, UiError::Unsupported(_)), "got {err:?}");
+        assert!(err.to_string().contains("1 secondary window"));
+    }
+
+    #[test]
+    fn default_set_shell_rejects_a_menu_bar() {
+        let mut runner = InertRunner;
+        let err = runner
+            .set_shell(shell_with_menu())
+            .expect_err("a runner that ignores the shell must not accept it");
+        assert!(matches!(err, UiError::Unsupported(_)), "got {err:?}");
+        assert!(err.to_string().contains("menu bar: true"));
+    }
+
+    #[cfg(feature = "egui")]
+    #[test]
+    fn egui_runner_accepts_windows_and_menu_bar() {
+        let mut reg = WindowRegistry::new();
+        let id = reg.open_window_with(WindowConfig::new("panel"), |ui| ui.label("panel"));
+        let shell = reg.take_shell(Some(MenuBar::build(|mb| {
+            mb.menu("File", |m| {
+                m.item("Quit", None, || {});
+            });
+        })));
+        let mut runner = EguiRunner::new();
+        runner.set_shell(shell).expect("egui consumes the shell");
+        assert_eq!(runner.shell.windows.len(), 1);
+        assert_eq!(runner.shell.windows[0].id, id);
+        assert!(runner.shell.has_menu_bar());
+    }
+
+    #[cfg(feature = "iced")]
+    #[test]
+    fn iced_runner_accepts_a_menu_bar() {
+        let mut runner = IcedRunner::new();
+        runner
+            .set_shell(shell_with_menu())
+            .expect("iced renders the menu bar through IcedUiCtx");
+        assert!(runner.menu_bar.is_some());
+    }
+
+    #[cfg(feature = "iced")]
+    #[test]
+    fn iced_runner_rejects_secondary_windows() {
+        let mut runner = IcedRunner::new();
+        let err = runner
+            .set_shell(shell_with_window())
+            .expect_err("iced 0.14 single-window runtime cannot open them");
+        assert!(matches!(err, UiError::Unsupported(_)), "got {err:?}");
+        assert!(runner.menu_bar.is_none());
     }
 }

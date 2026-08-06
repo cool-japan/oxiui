@@ -33,10 +33,10 @@ fn cpu_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     c
 }
 
-fn main() {
+fn main() -> Result<(), oxiui_compute_wgpu::ComputeError> {
     let Some(ctx) = ComputeContext::try_new() else {
         println!("[skip] No GPU adapter found — matrix_mul example requires a GPU.");
-        return;
+        return Ok(());
     };
 
     println!("Adapter: {:?}", ctx.adapter_info().backend);
@@ -118,7 +118,7 @@ fn main() {
     ctx.queue.submit(std::iter::once(encoder.finish()));
 
     // Read back C
-    let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf_c, m * n);
+    let output: Vec<f32> = read_back(&ctx.device, &ctx.queue, &buf_c, m * n)?;
 
     println!("A ({}x{}): {:?}", m, k, a);
     println!("B ({}x{}): {:?}", k, n, b);
@@ -135,4 +135,5 @@ fn main() {
         println!("MISMATCH — GPU result differs from CPU reference!");
         std::process::exit(1);
     }
+    Ok(())
 }

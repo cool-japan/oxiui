@@ -31,11 +31,38 @@ pub struct EguiUiCtx<'a> {
 
 impl<'a> EguiUiCtx<'a> {
     /// Wrap an egui `Ui` reference as an [`UiCtx`].
+    ///
+    /// The id sequence starts at `0`; see [`EguiUiCtx::with_id_base`] when two
+    /// contexts draw into the same `Ui` in one frame.
     pub fn new(ui: &'a mut egui::Ui) -> Self {
+        Self::with_id_base(ui, 0)
+    }
+
+    /// Wrap an egui `Ui` with the widget id sequence starting at `base`.
+    ///
+    /// Widgets that need persistent egui state (dropdowns, popups, modals,
+    /// grids) derive their [`egui::Id`] from this monotonically increasing
+    /// sequence.  Two contexts that draw into the *same* `Ui` in one frame must
+    /// therefore use disjoint id ranges, otherwise their widgets fight over the
+    /// same stored state — and a caller whose widget count varies between
+    /// frames (a menu bar whose drop-down opens and closes, say) must keep its
+    /// range separate from the app content so the content ids stay stable.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use oxiui_egui::EguiUiCtx;
+    /// # fn demo(ui: &mut egui::Ui) {
+    /// // Chrome drawn in a reserved high range; app content keeps 0, 1, 2, …
+    /// let mut chrome = EguiUiCtx::with_id_base(ui, usize::MAX / 2);
+    /// # let _ = &mut chrome;
+    /// # }
+    /// ```
+    pub fn with_id_base(ui: &'a mut egui::Ui, base: usize) -> Self {
         Self {
             ui,
             last_response: None,
-            id_seq: 0,
+            id_seq: base,
         }
     }
 

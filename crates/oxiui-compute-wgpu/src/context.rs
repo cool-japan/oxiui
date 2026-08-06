@@ -222,7 +222,7 @@ impl ComputeContext {
     ///
     /// if let Some(ctx) = ComputeContext::try_new() {
     ///     let d = ctx.dispatcher();
-    ///     let out = d.map_f32(&[1.0, 2.0, 3.0], "x * 2.0");
+    ///     let out = d.map_f32(&[1.0, 2.0, 3.0], "x * 2.0").unwrap();
     ///     assert_eq!(out, vec![2.0, 4.0, 6.0]);
     /// }
     /// ```

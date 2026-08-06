@@ -423,15 +423,52 @@ impl IcedUiCtx {
     /// Pre-allocates the internal spec vector using `config.spec_capacity_hint`
     /// (falling back to 8) to reduce per-frame allocations.
     pub fn new(config: IcedConfig) -> Self {
+        Self::with_id_base(config, 0)
+    }
+
+    /// Create an [`IcedUiCtx`] whose widget id counter starts at `base`.
+    ///
+    /// Widget ids key both retained state (`WidgetState`) and click routing
+    /// ([`Message::ButtonPressed`]), and they are allocated in draw order.  Two
+    /// contexts whose elements are combined into one frame must therefore use
+    /// **disjoint** id ranges: otherwise a click on one is delivered to the
+    /// other.  The same applies when one of them draws a varying number of
+    /// widgets between frames — its neighbour's ids would shift underneath it.
+    ///
+    /// Use this to reserve a high range for chrome (an application menu bar,
+    /// say) so the app content keeps the natural `0, 1, 2, …` range.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use oxiui_iced::adapter::{IcedConfig, IcedUiCtx};
+    /// use oxiui_core::UiCtx;
+    ///
+    /// let mut chrome = IcedUiCtx::with_id_base(IcedConfig::default(), usize::MAX / 2);
+    /// chrome.button("File");
+    /// let mut content = IcedUiCtx::new(IcedConfig::default());
+    /// content.button("Save");
+    /// // The two ranges cannot collide.
+    /// assert_eq!(content.next_widget_id(), 1);
+    /// assert_eq!(chrome.next_widget_id(), usize::MAX / 2 + 1);
+    /// ```
+    pub fn with_id_base(config: IcedConfig, base: usize) -> Self {
         let capacity = config.spec_capacity_hint.max(8);
         Self {
             specs: Vec::with_capacity(capacity),
-            next_id: 0,
+            next_id: base,
             pending_clicks: config.pending_clicks,
             state: config.state,
             spacing: config.spacing,
             padding: config.padding,
         }
+    }
+
+    /// The id the next allocated widget will receive.
+    ///
+    /// Useful for asserting that two contexts' id ranges do not overlap.
+    pub fn next_widget_id(&self) -> usize {
+        self.next_id
     }
 
     /// Return the number of widget specs collected so far.
@@ -1127,26 +1164,56 @@ impl UiCtx for IcedNullCtx {
 
 // ── OxiIcedWidget ─────────────────────────────────────────────────────────────
 
-use iced::advanced::{layout, renderer, widget as adv_widget};
+use iced::advanced::{layout, overlay, renderer, widget as adv_widget};
+
+/// Vertical spacing (logical px) used when a standalone [`OxiIcedWidget`]
+/// materializes a container-shaped [`WidgetSpec`] (e.g. `Vertical`, `Grid`).
+const OXI_WIDGET_SPACING: f32 = 8.0;
 
 /// A custom iced widget wrapping an OxiUI [`WidgetSpec`].
 ///
 /// Allows embedding OxiUI widget specs inside iced layout trees as first-class
 /// iced `Widget` values. Use [`oxi_widget`] to construct.
+///
+/// The spec is materialized into a real `iced::Element` (via the same
+/// `build_one` pipeline used by [`IcedUiCtx::into_iced_element`]) and wrapped
+/// in a sizing container. Every `Widget` trait method — layout, draw, event
+/// handling, tree state and overlays — is delegated to that inner element, so
+/// the widget renders and behaves exactly like the equivalent native iced tree.
+///
+/// Because a materialized spec emits [`Message`] (e.g. `Message::ButtonPressed`),
+/// the `Widget` impl is concrete over iced's default `Theme`/`Renderer` and the
+/// adapter's [`Message`] type — the same contract as
+/// [`IcedUiCtx::into_iced_element`].
 pub struct OxiIcedWidget {
     spec: WidgetSpec,
     width: iced::Length,
     height: iced::Length,
+    inner: Element<'static, Message>,
 }
 
 impl OxiIcedWidget {
     /// Create a new [`OxiIcedWidget`] wrapping the given [`WidgetSpec`].
     pub fn new(spec: WidgetSpec) -> Self {
+        let inner = Self::materialize(&spec, iced::Length::Shrink, iced::Length::Shrink);
         OxiIcedWidget {
             spec,
             width: iced::Length::Shrink,
             height: iced::Length::Shrink,
+            inner,
         }
+    }
+
+    /// Materialize `spec` into a sizing container around its iced element.
+    fn materialize(
+        spec: &WidgetSpec,
+        width: iced::Length,
+        height: iced::Length,
+    ) -> Element<'static, Message> {
+        container(build_one(spec.clone(), OXI_WIDGET_SPACING))
+            .width(width)
+            .height(height)
+            .into()
     }
 
     /// Return a reference to the underlying [`WidgetSpec`].
@@ -1157,47 +1224,122 @@ impl OxiIcedWidget {
     /// Set the widget's width.
     pub fn width(mut self, w: iced::Length) -> Self {
         self.width = w;
+        self.inner = Self::materialize(&self.spec, self.width, self.height);
         self
     }
 
     /// Set the widget's height.
     pub fn height(mut self, h: iced::Length) -> Self {
         self.height = h;
+        self.inner = Self::materialize(&self.spec, self.width, self.height);
         self
     }
 }
 
-impl<Msg, Theme, Renderer> iced::advanced::Widget<Msg, Theme, Renderer> for OxiIcedWidget
-where
-    Renderer: iced::advanced::Renderer,
-{
+impl adv_widget::Widget<Message, iced::Theme, iced::Renderer> for OxiIcedWidget {
+    fn tag(&self) -> adv_widget::tree::Tag {
+        self.inner.as_widget().tag()
+    }
+
+    fn state(&self) -> adv_widget::tree::State {
+        self.inner.as_widget().state()
+    }
+
+    fn children(&self) -> Vec<adv_widget::Tree> {
+        self.inner.as_widget().children()
+    }
+
+    fn diff(&self, tree: &mut adv_widget::Tree) {
+        self.inner.as_widget().diff(tree);
+    }
+
     fn size(&self) -> iced::Size<iced::Length> {
-        iced::Size::new(self.width, self.height)
+        self.inner.as_widget().size()
+    }
+
+    fn size_hint(&self) -> iced::Size<iced::Length> {
+        self.inner.as_widget().size_hint()
     }
 
     fn layout(
         &mut self,
-        _tree: &mut adv_widget::Tree,
-        _renderer: &Renderer,
+        tree: &mut adv_widget::Tree,
+        renderer: &iced::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let size = limits.resolve(self.width, self.height, iced::Size::ZERO);
-        layout::Node::new(size)
+        self.inner.as_widget_mut().layout(tree, renderer, limits)
     }
 
+    fn operate(
+        &mut self,
+        tree: &mut adv_widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn adv_widget::Operation,
+    ) {
+        self.inner
+            .as_widget_mut()
+            .operate(tree, layout, renderer, operation);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update(
+        &mut self,
+        tree: &mut adv_widget::Tree,
+        event: &iced::Event,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::advanced::mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, Message>,
+        viewport: &iced::Rectangle,
+    ) {
+        self.inner.as_widget_mut().update(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &adv_widget::Tree,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::advanced::mouse::Cursor,
+        viewport: &iced::Rectangle,
+        renderer: &iced::Renderer,
+    ) -> iced::advanced::mouse::Interaction {
+        self.inner
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
-        _tree: &adv_widget::Tree,
-        _renderer: &mut Renderer,
-        _theme: &Theme,
-        _style: &renderer::Style,
-        _layout: iced::advanced::Layout<'_>,
-        _cursor: iced::advanced::mouse::Cursor,
-        _viewport: &iced::Rectangle,
+        tree: &adv_widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: iced::advanced::Layout<'_>,
+        cursor: iced::advanced::mouse::Cursor,
+        viewport: &iced::Rectangle,
     ) {
-        // Stub: drawing is delegated to the materialized iced element pipeline.
-        // Full drawing would require converting to an Element and calling its
-        // Widget::draw — which requires a concrete renderer type. Deferred.
+        // Delegate to the materialized element so the spec actually renders.
+        self.inner
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut adv_widget::Tree,
+        layout: iced::advanced::Layout<'a>,
+        renderer: &iced::Renderer,
+        viewport: &iced::Rectangle,
+        translation: iced::Vector,
+    ) -> Option<overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
+        self.inner
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, viewport, translation)
     }
 }
 
@@ -1325,6 +1467,32 @@ mod tests {
             .height(iced::Length::Fixed(100.0));
         assert_eq!(w.width, iced::Length::Fill);
         assert_eq!(w.height, iced::Length::Fixed(100.0));
+    }
+
+    #[test]
+    fn oxi_widget_delegates_to_materialized_inner_element() {
+        use iced::advanced::Widget;
+
+        // Regression: `Widget::draw` was previously an empty stub and the spec was
+        // never materialized into a real iced element — a placed widget was a
+        // correctly-sized invisible hole. The spec is now built into a live iced
+        // element tree, and every `Widget` method (layout, draw, children, …) is
+        // delegated to it. A container-shaped spec must therefore surface its
+        // children through the delegated `children()` tree; the old stub had no
+        // inner element and could expose none.
+        let spec = WidgetSpec::Vertical(vec![
+            WidgetSpec::Label(Cow::Borrowed("first")),
+            WidgetSpec::Label(Cow::Borrowed("second")),
+        ]);
+        let w = oxi_widget(spec);
+        let children =
+            <OxiIcedWidget as Widget<Message, iced::Theme, iced::Renderer>>::children(&w);
+        assert_eq!(
+            children.len(),
+            2,
+            "materialized OxiIcedWidget must delegate to its inner element's child \
+             tree (two labels), proving draw/layout are delegated rather than stubbed"
+        );
     }
 
     // ── Keyboard mapping ─────────────────────────────────────────────────────

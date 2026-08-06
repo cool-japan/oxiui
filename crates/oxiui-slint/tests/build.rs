@@ -45,16 +45,23 @@ fn slint_ctx_multiple_widgets() {
     assert_eq!(ctx.items.len(), 3);
 }
 
-#[cfg(feature = "slint")]
 #[test]
-fn run_slint_headless_ok() {
+fn run_slint_reports_unsupported_window() {
+    use oxiui_core::UiError;
     use oxiui_slint::run_slint;
     use oxiui_theme::cooljapan_default;
 
+    // `run_slint` is contracted to open a native window; that path is not yet
+    // wired, so it must surface a typed `UiError::Unsupported` rather than a
+    // fake success. A caller must be able to tell "no window opened" from Ok.
     let theme = cooljapan_default();
-    run_slint(&*theme, |ui| {
+    let err = run_slint(&*theme, |ui| {
         ui.heading("Slint test");
         ui.label("headless");
     })
-    .expect("run_slint should return Ok in M5 headless mode");
+    .expect_err("run_slint must not report success without opening a window");
+    assert!(
+        matches!(err, UiError::Unsupported(_)),
+        "expected UiError::Unsupported, got {err:?}"
+    );
 }

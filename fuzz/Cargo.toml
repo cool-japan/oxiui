@@ -1,0 +1,37 @@
+[workspace]
+
+[package]
+name = "oxiui-fuzz"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oxiui-core = { path = "../crates/oxiui-core" }
+# `default-features = false` — the fuzz targets only exercise the rasterizer
+# (scanline/blend/path modules), which are always compiled in; this skips
+# pulling in the optional `text`/`theme`/`simd`/`fft-blur` dependency trees
+# for a leaner, faster fuzz build.
+oxiui-render-soft = { path = "../crates/oxiui-render-soft", default-features = false }
+
+[[bin]]
+name = "fuzz_fill_polygon"
+path = "fuzz_targets/fuzz_fill_polygon.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_composite_into"
+path = "fuzz_targets/fuzz_composite_into.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bezier_flatten"
+path = "fuzz_targets/fuzz_bezier_flatten.rs"
+test = false
+doc = false
