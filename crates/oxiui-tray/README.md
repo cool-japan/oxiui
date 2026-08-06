@@ -16,10 +16,10 @@ With `default = []`, the crate is inert (no `tray-icon` dependency at all) until
 ```toml
 [dependencies]
 # Inert by default — no tray-icon / GTK dependency:
-oxiui-tray = "0.2.1"
+oxiui-tray = "0.2.3"
 
 # Enable the actual system tray icon (pulls GTK on Linux):
-oxiui-tray = { version = "0.2.1", features = ["tray"] }
+oxiui-tray = { version = "0.2.3", features = ["tray"] }
 ```
 
 ## Quick Start

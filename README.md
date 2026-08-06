@@ -57,13 +57,13 @@ No breaking changes in 0.2.1. See [CHANGELOG.md](CHANGELOG.md) for full details.
 ```toml
 [dependencies]
 # Default: egui + wgpu (GPU path)
-oxiui = "0.2.1"
+oxiui = "0.2.3"
 
 # Headless / CI / ffi-audit path (no GPU stack):
-oxiui = { version = "0.2.1", default-features = false, features = ["software"] }
+oxiui = { version = "0.2.3", default-features = false, features = ["software"] }
 
 # iced backend:
-oxiui = { version = "0.2.1", features = ["iced"] }
+oxiui = { version = "0.2.3", features = ["iced"] }
 ```
 
 ```rust

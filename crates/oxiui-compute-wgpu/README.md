@@ -19,7 +19,7 @@ Targets wgpu 29. See the [wgpu 29 Notes](#wgpu-29-notes) for the renamed APIs.
 
 ```toml
 [dependencies]
-oxiui-compute-wgpu = "0.2.1"
+oxiui-compute-wgpu = "0.2.3"
 ```
 
 `wgpu`, `bytemuck`, and `pollster` are re-exported, so a single dependency

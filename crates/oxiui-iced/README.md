@@ -11,7 +11,7 @@ iced is a **Pure Rust** GUI framework, so this adapter keeps the OxiUI stack C/C
 
 ```toml
 [dependencies]
-oxiui-iced = "0.2.1"
+oxiui-iced = "0.2.3"
 ```
 
 ## Quick Start

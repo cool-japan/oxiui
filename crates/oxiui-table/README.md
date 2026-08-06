@@ -12,13 +12,13 @@ The data/logic layer is `#![forbid(unsafe_code)]` and 100% Pure Rust with no man
 ```toml
 [dependencies]
 # Headless core only (default):
-oxiui-table = "0.2.1"
+oxiui-table = "0.2.3"
 
 # With the egui rendering backend:
-oxiui-table = { version = "0.2.1", features = ["egui-table"] }
+oxiui-table = { version = "0.2.3", features = ["egui-table"] }
 
 # With the iced rendering backend:
-oxiui-table = { version = "0.2.1", features = ["iced-table"] }
+oxiui-table = { version = "0.2.3", features = ["iced-table"] }
 ```
 
 ## Quick Start

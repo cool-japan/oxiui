@@ -21,7 +21,7 @@ Unlike other quarantine crates in the workspace, `oxiui-hot-reload-notify` has n
 
 ```toml
 [dependencies]
-oxiui-hot-reload-notify = "0.2.1"
+oxiui-hot-reload-notify = "0.2.3"
 ```
 
 ## Quick Start
