@@ -122,8 +122,8 @@ web-sys              = { version = "0.3.103", features = [
 
 # Wave 1 + Wave 2 deps
 oxifont      = { version = "0.2.2" }
-oxitext      = { version = "0.2.2" }
-oxitext-sdf  = { version = "0.2.2" }
+oxitext      = { version = "0.2.3" }
+oxitext-sdf  = { version = "0.2.3" }
 
 # PNG encoding/decoding — pure Rust, zero C deps
 png = { version = "0.18.1" }
